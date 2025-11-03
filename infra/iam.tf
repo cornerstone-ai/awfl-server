@@ -5,6 +5,10 @@ terraform {
       source  = "hashicorp/google"
       version = "~> 5.0"
     }
+    google-beta = {
+      source  = "hashicorp/google-beta"
+      version = "~> 5.0"
+    }
     local = {
       source  = "hashicorp/local"
       version = "~> 2.4"
@@ -30,6 +34,10 @@ variable "project_roles" {
 }
 
 provider "google" {
+  project = var.project_id
+}
+
+provider "google-beta" {
   project = var.project_id
 }
 

@@ -13,7 +13,6 @@ services:
       - GOOGLE_MAPS_API_KEY=${GOOGLE_MAPS_API_KEY}
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GOOGLE_APPLICATION_CREDENTIALS=/app/serviceAccountKey.json
-      - PYTHON_API=http://python-server:8080
       - FIRESTORE_EMULATOR_HOST=firestore-emulator:8085
       - WORKFLOW_BASE_URL=http://127.0.0.1:5050/jobs
       - WORKFLOW_ENV=Dev

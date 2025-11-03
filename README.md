@@ -111,20 +111,53 @@ Infrastructure (Terraform)
 - Goal: provision GCP IAM roles and related resources required by the server/workflows.
 - Variables:
   - project_id (non-secret)
+  - firestore_location (optional; default "nam5". Immutable after creation.)
+  - firebase_web_app_display_name (optional; default "awfl-web")
+- Provisioned services/resources:
+  - IAM: local dev service account and optional project role bindings
+  - Firestore: enables firestore.googleapis.com and creates the default Firestore database in Native mode with lifecycle.prevent_destroy = true
+  - Firebase: enables firebase.googleapis.com and identitytoolkit.googleapis.com, adds Firebase to the project, and creates a Firebase Web App
+- Outputs:
+  - service_account_email
+  - service_account_key_json (sensitive)
+  - firestore_database_name
+  - firebase_web_app_api_key
+  - firebase_web_app_auth_domain
+  - firebase_web_app_app_id
+  - firebase_web_client_config (combined map)
 - Setup steps:
   - cd infra
   - cp terraform.tfvars.example dev.auto.tfvars
-  - Edit dev.auto.tfvars and set project_id = "YOUR_GCP_PROJECT_ID"
+  - Edit dev.auto.tfvars and set project_id = "YOUR_GCP_PROJECT_ID" (and optionally firestore_location)
   - terraform init
   - Optional: configure remote state (recommended) before first apply:
     - Use a GCS backend bucket (not committed) to avoid local terraform.tfstate in git
   - terraform plan
   - terraform apply
 - One-off alternative without files:
-  - terraform apply -var="project_id=YOUR_GCP_PROJECT_ID"
+  - terraform apply -var="project_id=YOUR_GCP_PROJECT_ID" -var="firestore_location=nam5"
 - Notes:
+  - Firestore database location_id is immutable once created. Choose carefully (multi-region nam5/eur3 recommended).
+  - If a Firestore database already exists in the project (or in Datastore mode), creation will fail; consider importing or reconciling manually.
+  - Firebase Web App apiKey is a public client key and not a secret. Keep service account keys and secrets out of source control.
   - project_id is not sensitive; committing terraform.tfvars.example is safe. Keep dev.auto.tfvars local.
   - Do not commit terraform.tfstate; use remote state for teams/CI.
+
+Firebase Web App (client config)
+- After apply, retrieve outputs:
+  - terraform output firebase_web_client_config
+  - terraform output firebase_web_app_api_key
+  - terraform output firebase_web_app_auth_domain
+  - terraform output firebase_web_app_app_id
+- Example client initialization (JS):
+  const cfg = /* value of firebase_web_client_config */;
+  import { initializeApp } from "firebase/app";
+  import { getAuth, GoogleAuthProvider } from "firebase/auth";
+  const app = initializeApp(cfg);
+  const auth = getAuth(app);
+  const provider = new GoogleAuthProvider();
+  // signInWithPopup(auth, provider)
+- Enable Google Sign-In provider in Firebase Console (Authentication -> Sign-in method) and add your app domain(s) to the authorized domains. This step is not currently managed by Terraform in this repo.
 
 Deployment (example: Cloud Run)
 - Build and push an image (Artifact Registry example):
