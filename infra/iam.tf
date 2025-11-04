@@ -1,21 +1,3 @@
-terraform {
-  required_version = ">= 1.5.0"
-  required_providers {
-    google = {
-      source  = "hashicorp/google"
-      version = "~> 5.0"
-    }
-    google-beta = {
-      source  = "hashicorp/google-beta"
-      version = "~> 5.0"
-    }
-    local = {
-      source  = "hashicorp/local"
-      version = "~> 2.4"
-    }
-  }
-}
-
 variable "project_id" {
   description = "GCP project ID to create resources in"
   type        = string
@@ -31,14 +13,6 @@ variable "project_roles" {
   description = "Project-level IAM roles to bind to the service account"
   type        = list(string)
   default     = []
-}
-
-provider "google" {
-  project = var.project_id
-}
-
-provider "google-beta" {
-  project = var.project_id
 }
 
 # Ensure necessary APIs are enabled for SA and token issuance
@@ -67,6 +41,32 @@ resource "google_project_iam_member" "dev_server_bindings" {
   project  = var.project_id
   role     = each.value
   member   = "serviceAccount:${google_service_account.dev_server.email}"
+}
+
+# ------------------------------
+# Workflows IAM (locals only)
+# Grant both Workflows Invoker and Workflows Viewer to local dev SA.
+# ------------------------------
+locals {
+  workflows_members = toset([
+    "serviceAccount:${google_service_account.dev_server.email}"
+  ])
+}
+
+resource "google_project_iam_member" "workflows_invoker_group" {
+  for_each = local.workflows_members
+  project  = var.project_id
+  role     = "roles/workflows.invoker"
+  member   = each.value
+  depends_on = [google_service_account.dev_server]
+}
+
+resource "google_project_iam_member" "workflows_viewer_group" {
+  for_each = local.workflows_members
+  project  = var.project_id
+  role     = "roles/workflows.viewer"
+  member   = each.value
+  depends_on = [google_service_account.dev_server]
 }
 
 # Create a key for the service account (JSON credentials)
