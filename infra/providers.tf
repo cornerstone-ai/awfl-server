@@ -17,11 +17,17 @@ terraform {
 }
 
 provider "google" {
-  project = var.project_id
+  project               = var.project_id
+  # Ensure requests made with user ADC set the quota/billing project header
+  user_project_override = true
+  billing_project       = var.project_id
 }
 
 provider "google-beta" {
-  project = var.project_id
+  project               = var.project_id
+  # Ensure requests made with user ADC set the quota/billing project header
+  user_project_override = true
+  billing_project       = var.project_id
 }
 
 # local provider needed for local_file resource
