@@ -46,6 +46,26 @@ data "google_firebase_web_app_config" "web" {
   web_app_id = google_firebase_web_app.web.app_id
 }
 
+# Configure Firebase Auth authorized domains so OAuth redirects work locally and on Firebase Hosting
+# Note: If you manage authorized domains here, include the default Firebase Hosting domains
+# to avoid accidental removal in the console.
+resource "google_identity_platform_config" "default" {
+  provider = google-beta
+  project  = var.project_id
+
+  authorized_domains = [
+    "localhost",                    # local dev (all ports, e.g., Vite 5173)
+    "127.0.0.1",                    # loopback
+    "${var.project_id}.firebaseapp.com", # default Firebase Hosting domain
+    "${var.project_id}.web.app"          # default Firebase Hosting domain
+  ]
+
+  depends_on = [
+    google_project_service.identitytoolkit,
+    google_firebase_project.default
+  ]
+}
+
 # Output individual config values
 output "firebase_web_app_api_key" {
   description = "Firebase Web App apiKey (public client key)"
@@ -62,16 +82,15 @@ output "firebase_web_app_app_id" {
   value       = google_firebase_web_app.web.app_id
 }
 
-# Combined config for frontend consumption
-output "firebase_web_client_config" {
-  description = "Firebase Web client config (non-sensitive)."
-  value = {
-    apiKey            = data.google_firebase_web_app_config.web.api_key
-    authDomain        = data.google_firebase_web_app_config.web.auth_domain
-    projectId         = var.project_id
-    appId             = google_firebase_web_app.web.app_id
-    storageBucket     = data.google_firebase_web_app_config.web.storage_bucket
-    messagingSenderId = data.google_firebase_web_app_config.web.messaging_sender_id
-    measurementId     = data.google_firebase_web_app_config.web.measurement_id
-  }
+# Vite-compatible .env snippet for easy copy/paste
+output "firebase_vite_env" {
+  description = "Lines suitable for a Vite .env file"
+  value = <<EOT
+VITE_FIREBASE_API_KEY=${data.google_firebase_web_app_config.web.api_key}
+VITE_FIREBASE_AUTH_DOMAIN=${data.google_firebase_web_app_config.web.auth_domain}
+VITE_FIREBASE_PROJECT_ID=${var.project_id}
+VITE_FIREBASE_APP_ID=${google_firebase_web_app.web.app_id}
+VITE_FIREBASE_MESSAGING_SENDER_ID=${data.google_firebase_web_app_config.web.messaging_sender_id}
+VITE_FIREBASE_MEASUREMENT_ID=${data.google_firebase_web_app_config.web.measurement_id}
+EOT
 }

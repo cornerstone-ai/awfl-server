@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "default": "awfl-us",
+    "production": "awfl-us"
+  },
+  "targets": {},
+  "etags": {}
+}
