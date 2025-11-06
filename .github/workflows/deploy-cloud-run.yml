@@ -1,0 +1,88 @@
+name: Deploy to Cloud Run on Merge
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    env:
+      # Required repository variables (configure under Settings > Variables)
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
+      GCP_DEPLOY_SA: ${{ vars.GCP_DEPLOY_SA }}
+      CLOUD_RUN_RUNTIME_SA: ${{ vars.CLOUD_RUN_RUNTIME_SA }}
+      CLOUD_RUN_API_SERVICE: ${{ vars.CLOUD_RUN_API_SERVICE }}
+      CLOUD_RUN_JOBS_SERVICE: ${{ vars.CLOUD_RUN_JOBS_SERVICE }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF/OIDC)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GCP_WIF_PROVIDER }}
+          service_account: ${{ env.GCP_DEPLOY_SA }}
+          token_format: access_token
+
+      - name: Setup gcloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Configure gcloud
+        run: |
+          gcloud config set project "${GCP_PROJECT_ID}"
+          gcloud config set run/region "${GCP_REGION}"
+
+      # Build --set-secrets flag from secrets.txt (Secret Manager keys listed one per line)
+      - name: Build --set-secrets flag from secrets.txt
+        id: secrets
+        run: |
+          if [[ -f secrets.txt ]]; then
+            secret_list=$(cat secrets.txt | while read -r secret; do
+              if [[ -n "$secret" ]]; then
+                echo "${secret}=projects/${GCP_PROJECT_ID}/secrets/${secret}:latest"
+              fi
+            done | paste -sd "," -)
+            if [[ -n "${secret_list}" ]]; then
+              echo "SECRET_FLAGS=--set-secrets=${secret_list}" >> $GITHUB_OUTPUT
+            else
+              echo "SECRET_FLAGS=" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "secrets.txt not found; continuing without --set-secrets"
+            echo "SECRET_FLAGS=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Deploy API service (public)
+        run: |
+          gcloud run deploy "${CLOUD_RUN_API_SERVICE}" \
+            --region="${GCP_REGION}" \
+            --source=. \
+            --service-account="${CLOUD_RUN_RUNTIME_SA}" \
+            --allow-unauthenticated \
+            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=api.server.js,GCP_PROJECT=${GCP_PROJECT_ID}" \
+            ${{ steps.secrets.outputs.SECRET_FLAGS }}
+
+      - name: Deploy Jobs service (auth-required)
+        run: |
+          gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}" \
+            --region="${GCP_REGION}" \
+            --source=. \
+            --service-account="${CLOUD_RUN_RUNTIME_SA}" \
+            --no-allow-unauthenticated \
+            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=jobs.server.js,GCP_PROJECT=${GCP_PROJECT_ID}" \
+            ${{ steps.secrets.outputs.SECRET_FLAGS }}
+
+# Note:
+# - IAM bindings (e.g., public invoker) and API enablement are intentionally not managed here; Terraform owns these.
+# - Ensure Terraform has enabled required services (Cloud Run, Cloud Build, Artifact Registry, Secret Manager)
+#   and has applied the correct IAM for the deploy SA and runtime SA before this workflow runs.

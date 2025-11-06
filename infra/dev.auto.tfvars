@@ -1,4 +1,6 @@
-project_id = "awfl-us"
+project_id        = "awfl-us"
+root_domain       = "awfl.us"
+github_repository = "awfl-us/server"
 
 # Optional: Firestore database location (immutable after creation)
 # Multi-region recommended: nam5 (North America) or eur3 (Europe)
