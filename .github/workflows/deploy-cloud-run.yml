@@ -13,7 +13,7 @@ jobs:
       id-token: write
 
     env:
-      # Required repository variables (configure under Settings > Variables)
+      # Default to repository variables; will be overridden by JSON if present
       GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       GCP_REGION: ${{ vars.GCP_REGION }}
       GCP_WIF_PROVIDER: ${{ vars.GCP_WIF_PROVIDER }}
@@ -24,6 +24,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Load env from .github/actions-variables.json (if present)
+        run: |
+          set -euo pipefail
+          FILE=".github/actions-variables.json"
+          if [ -f "$FILE" ]; then
+            echo "Loading variables from $FILE"
+            jq -r 'to_entries[] | [.key, .value] | @tsv' "$FILE" | while IFS=$'\t' read -r key val; do
+              printf '%s=%s\n' "$key" "$val" >> "$GITHUB_ENV"
+            done
+          else
+            echo "No $FILE found; using repository Variables"
+          fi
 
       - name: Authenticate to Google Cloud (WIF/OIDC)
         uses: google-github-actions/auth@v2
@@ -83,6 +96,7 @@ jobs:
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
 # Note:
-# - IAM bindings (e.g., public invoker) and API enablement are intentionally not managed here; Terraform owns these.
-# - Ensure Terraform has enabled required services (Cloud Run, Cloud Build, Artifact Registry, Secret Manager)
-#   and has applied the correct IAM for the deploy SA and runtime SA before this workflow runs.
+# - This workflow now loads deployment variables from .github/actions-variables.json when present,
+#   removing ordering dependency on the Set Actions Variables workflow.
+# - Ensure Terraform generates the JSON file (infra/github_variables.tf) and commit it.
+# - IAM bindings and API enablement remain managed via Terraform.
