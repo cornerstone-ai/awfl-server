@@ -69,6 +69,17 @@ resource "google_project_iam_member" "workflows_viewer_group" {
   depends_on = [google_service_account.dev_server]
 }
 
+# ------------------------------
+# Project-level Secret Manager access for Cloud Run runtime SA
+# Grants the default Compute Engine service account secret accessor on the project.
+# This satisfies Cloud Run deploy-time validation for --set-secrets.
+# ------------------------------
+resource "google_project_iam_member" "runtime_secret_accessor" {
+  project = var.project_id
+  role    = "roles/secretmanager.secretAccessor"
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
 # Create a key for the service account (JSON credentials)
 # NOTE: The private key is stored in Terraform state; keep state secure.
 resource "google_service_account_key" "dev_server" {
