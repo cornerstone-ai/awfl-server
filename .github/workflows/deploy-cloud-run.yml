@@ -59,12 +59,10 @@ jobs:
       - name: Build --set-secrets flag from secrets.txt
         id: secrets
         run: |
+          # Cloud Run expects ENV=SECRET:VERSION (optionally :PROJECT for cross-project).
+          # Using same-project secrets, so we omit the projects/... path used by Cloud Functions.
           if [[ -f secrets.txt ]]; then
-            secret_list=$(cat secrets.txt | while read -r secret; do
-              if [[ -n "$secret" ]]; then
-                echo "${secret}=projects/${GCP_PROJECT_ID}/secrets/${secret}:latest"
-              fi
-            done | paste -sd "," -)
+            secret_list=$(grep -vE '^\s*#' secrets.txt | grep -vE '^\s*$' | awk '{print $1"="$1":latest"}' | paste -sd "," -)
             if [[ -n "${secret_list}" ]]; then
               echo "SECRET_FLAGS=--set-secrets=${secret_list}" >> $GITHUB_OUTPUT
             else

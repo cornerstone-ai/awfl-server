@@ -30,6 +30,13 @@ resource "google_project_service" "cloudbuild" {
   disable_on_destroy = false
 }
 
+# Secret Manager for managing runtime secrets
+resource "google_project_service" "secretmanager" {
+  project            = var.project_id
+  service            = "secretmanager.googleapis.com"
+  disable_on_destroy = false
+}
+
 # Certificate Manager is often auto-used by Cloud Run for managed certs; enable explicitly
 resource "google_project_service" "certman" {
   project            = var.project_id

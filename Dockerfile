@@ -2,7 +2,7 @@ FROM --platform=linux/amd64 node:22-slim
 
 WORKDIR /app
 
-# Install system dependencies and Chromium (used by some jobs)
+# Install system dependencies and Chromium
 RUN apt-get update && apt-get install -y \
   chromium \
   ca-certificates \
@@ -37,19 +37,18 @@ ENV CHROME_PATH=/usr/bin/chromium
 
 # Copy package files and install dependencies
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm install
 
 # Copy rest of the app
 COPY . .
 
 # Environment
-ENV NODE_ENV=production
+ENV NODE_ENV=development
 
-# Expose service port
-EXPOSE 8080
+# Expose ports
+EXPOSE 5000 4000
 
-# Ensure scripts are executable
-RUN chmod +x scripts/start.sh scripts/load-secrets.sh || true
-
-# Start via our launcher which picks the proper entry (api.server.js or jobs.server.js)
-CMD ["bash", "scripts/start.sh"]
+# Load secrets (if present) then start app
+COPY secrets.txt scripts/load-secrets.sh ./
+RUN chmod +x load-secrets.sh
+CMD ["npm", "run", "serve"]
