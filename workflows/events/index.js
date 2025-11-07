@@ -30,7 +30,7 @@ function parseTtlMs(q) {
 }
 
 // Health and metrics
-router.get('/healthz', (req, res) => {
+router.get('/health', (req, res) => {
   const b = pickBackend(req.userId, req.projectId);
   res.status(200).json({ ok: true, backend: b.kind });
 });

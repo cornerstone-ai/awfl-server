@@ -35,7 +35,7 @@ Steps
   - dev stop tears down anything started by the CLI session.
 
 3) Validate
-- Health check: http://localhost:5050/api/healthz
+- Health check: http://localhost:5050/api/health
 - If you enabled ngrok, the tunnel URL is printed by the CLI and visible via dev status.
 
 4) Stop
@@ -58,7 +58,7 @@ Primary services and consumers
   - Provides workflow orchestration, tools, context assembly, tasks, and event ingestion
 
 API surface (high-level)
-- GET /api/healthz: health check
+- GET /api/health: health check
 - /api/workflows/*: workflow execution, definitions, and tools
 - /jobs/*: internal services used by workflows
   - /jobs/tools/*: shared tools API
@@ -96,7 +96,7 @@ Environment configuration
 Local development
 - Using Docker (recommended):
   - docker compose up --build
-  - Health check: http://localhost:5050/api/healthz
+  - Health check: http://localhost:5050/api/health
   - Nginx router exposes 8081 if needed by your setup
 - Without Docker:
   - npm install
@@ -241,12 +241,12 @@ Security and safety notes
 - Never commit real secrets (OPENAI_API_KEY, GITHUB_TOKEN, serviceAccountKey.json).
 - Prefer Google Secret Manager or your secret manager of choice for production.
 - Keep Terraform state out of git; configure remote backend in GCS.
-- Be mindful of request logs (the dev logger prints headers and body for non-/healthz requests).
+- Be mindful of request logs (the dev logger prints headers and body for non-/health requests).
 
 Troubleshooting
 - If the Firestore emulator is used, ensure ports 8085/4000 are available.
 - For CORS/browser use, you may need to enable CORS middleware in serve.js for your origins.
-- Check container health at /api/healthz and logs from docker compose.
+- Check container health at /api/health and logs from docker compose.
 
 License
 - MIT (see LICENSE)

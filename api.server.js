@@ -6,16 +6,15 @@ app.use(express.json({ limit: '1mb' }))
 
 const logging = (req, _res, next) => {
   const { method, url } = req
-  if (!url.includes('healthz')) {
+  if (!url.includes('health')) {
     console.log(`[API] ${method} ${url}`)
   }
   next()
 }
 app.use(logging)
 
-// Health checks
-app.get('/healthz', (_req, res) => res.status(200).send('OK'))
-// app.get('/api/healthz', (_req, res) => res.status(200).send('OK'))
+// Health checks (support both /health and /api/health for compatibility)
+app.get('/health', (_req, res) => res.status(200).send('OK'))
 
 // Workflows (primary mount)
 app.use('/workflows', workflowsRoutes)

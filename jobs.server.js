@@ -6,7 +6,7 @@ app.use(express.json({ limit: '1mb' }))
 
 const logging = (req, _res, next) => {
   const { method, url } = req
-  if (!url.includes('healthz')) {
+  if (!url.includes('health')) {
     console.log(`[JOBS] ${method} ${url}`)
   }
   next()
@@ -14,8 +14,8 @@ const logging = (req, _res, next) => {
 app.use(logging)
 
 // Health checks
-app.get('/healthz', (_req, res) => res.status(200).send('OK'))
-// app.get('/jobs/healthz', (_req, res) => res.status(200).send('OK'))
+app.get('/health', (_req, res) => res.status(200).send('OK'))
+// app.get('/jobs/health', (_req, res) => res.status(200).send('OK'))
 
 // Mount under both root and /jobs for compatibility
 app.use('/', jobsRoutes)

@@ -9,7 +9,7 @@ app.use(express.json({ limit: '1mb' }));
 
 const logging = (req, res, next) => {
   const { method, url, headers, body } = req;
-  if (url != "/healthz") {
+  if (!url.includes("/health")) {
     console.log(`[Request] Method: ${method}, URL: ${url}, Headers: ${JSON.stringify(headers)}, Body: ${JSON.stringify(body)}`);
   }
   next();
@@ -17,7 +17,7 @@ const logging = (req, res, next) => {
 
 app.use(logging);
 
-app.get('/api/healthz', (req, res) => res.status(200).send('OK'));
+app.get('/api/health', (req, res) => res.status(200).send('OK'));
 
 // API and Jobs routes
 app.use('/api/workflows', workflowsRoutes);
