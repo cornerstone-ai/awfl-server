@@ -32,10 +32,11 @@ resource "google_cloud_run_domain_mapping" "api" {
     route_name = "api"
   }
 
-  # Ensure required APIs are enabled first
+  # Ensure required APIs are enabled first and domain is verified
   depends_on = [
     google_project_service.run,
     google_project_service.certman,
+    google_site_verification_web_resource.domain,
   ]
 }
 
@@ -54,10 +55,11 @@ resource "google_cloud_run_domain_mapping" "jobs" {
     route_name = "jobs"
   }
 
-  # Ensure required APIs are enabled first
+  # Ensure required APIs are enabled first and domain is verified
   depends_on = [
     google_project_service.run,
     google_project_service.certman,
+    google_site_verification_web_resource.domain,
   ]
 }
 
@@ -68,7 +70,7 @@ resource "google_cloud_run_domain_mapping" "jobs" {
 # ------------------------------
 
 resource "google_dns_record_set" "api_cname" {
-  count       = var.enable_domain_mappings ? 1 : 0
+  count        = var.enable_domain_mappings ? 1 : 0
   managed_zone = google_dns_managed_zone.root.name
   name         = "api.${var.root_domain}."
   type         = "CNAME"
@@ -83,7 +85,7 @@ resource "google_dns_record_set" "api_cname" {
 }
 
 resource "google_dns_record_set" "jobs_cname" {
-  count       = var.enable_domain_mappings ? 1 : 0
+  count        = var.enable_domain_mappings ? 1 : 0
   managed_zone = google_dns_managed_zone.root.name
   name         = "jobs.${var.root_domain}."
   type         = "CNAME"

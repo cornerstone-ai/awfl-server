@@ -143,6 +143,40 @@ Infrastructure (Terraform)
   - project_id is not sensitive; committing terraform.tfvars.example is safe. Keep dev.auto.tfvars local.
   - Do not commit terraform.tfstate; use remote state for teams/CI.
 
+CI deploys Cloud Run services on merge
+- On push/merge to main, .github/workflows/deploy-cloud-run.yml builds the image and deploys two Cloud Run services:
+  - Public API service (SERVICE_TARGET=api.server.js)
+  - Auth-required Jobs service (SERVICE_TARGET=jobs.server.js)
+- Service names, region, and accounts come from repository Variables or .github/actions-variables.json.
+- Secrets are injected via Secret Manager using secrets.txt (names only, values in GCP).
+
+Domain verification and Cloud Run domain mappings (two-step)
+- Overview
+  - Terraform in infra manages Google Search Console site verification via DNS and, optionally, Cloud Run domain mappings and DNS records for api.<root_domain> and jobs.<root_domain>.
+  - Because Cloud Run domain mappings must point to existing services, we use a toggle enable_domain_mappings (default false) to decouple verification/DNS from mappings.
+- Application Default Credentials (ADC) requirement
+  - The google provider uses ADC. To call the Site Verification API during apply, you must authenticate with a user credential that has the siteverification scope.
+  - Run: gcloud auth application-default login --scopes=https://www.googleapis.com/auth/siteverification
+    - This opens a browser and redirects to http://localhost:8085 for the OAuth callback. If a browser can’t be launched, use --no-launch-browser to copy/paste the URL.
+    - To reset ADC later: gcloud auth application-default revoke (then login again as needed).
+- Step 1: Create DNS zone and TXT (verification) record
+  - In infra/dev.auto.tfvars, set root_domain = "yourdomain.tld" and leave enable_domain_mappings = false (default).
+  - terraform apply will:
+    - Create a public Cloud DNS managed zone for the root domain and output dns_nameservers.
+    - Create the site verification TXT record in that zone.
+  - At your domain registrar, set the nameservers for your root domain to the dns_nameservers output by Terraform.
+  - Wait for DNS to propagate, then run terraform apply again so Terraform can claim ownership (google_site_verification_web_resource).
+- Step 2: Ensure services exist (created by CI on merge)
+  - Merge to main so the GitHub Actions workflow deploys the Cloud Run services (api and jobs) in the configured region/project.
+  - Confirm the service names match what infra expects (defaults are api and jobs; the domain mappings refer to these names).
+- Step 3: Enable domain mappings and create CNAMEs
+  - Do not commit this toggle; use a local override file that is gitignored:
+    - Create infra/dev.local.auto.tfvars with: enable_domain_mappings = true
+  - terraform apply will then create:
+    - google_cloud_run_domain_mapping resources for api.<root_domain> and jobs.<root_domain>
+    - CNAME records pointing to ghs.googlehosted.com for those subdomains
+  - After certificate provisioning completes (managed by Cloud Run), your subdomains should serve the respective services.
+
 Firebase Web App (client config)
 - After apply, retrieve outputs:
   - terraform output firebase_web_client_config
@@ -171,6 +205,37 @@ Deployment (example: Cloud Run)
     --set-env-vars "NODE_ENV=production,WORKFLOW_ENV=Prod,BASE_URL=https://YOUR_DOMAIN" \
     --update-secrets "GOOGLE_APPLICATION_CREDENTIALS=projects/PROJECT_ID/secrets/SVC_KEY:latest"
 - Ensure Firestore (or emulator in dev) and any external APIs are reachable from the environment.
+
+Runtime secrets: Secret Manager + secrets.txt (for Cloud Run deploys)
+- Overview
+  - This repo’s GitHub Actions workflow (.github/workflows/deploy-cloud-run.yml) reads a secrets.txt file at the repo root and turns each line into a Cloud Run --set-secrets flag in the form ENV=SECRET_NAME:latest.
+  - Secret names should match the environment variable names you want available in the container.
+  - The workflow uses the latest version of each secret at deploy time.
+- Prerequisites
+  - Secret Manager API is enabled (managed by infra/apis.tf).
+  - The Cloud Run runtime service account has roles/secretmanager.secretAccessor at the project level (managed by infra; default Compute Engine SA is granted this role).
+- Create secrets (same project as the deployment)
+  - Example (OPENAI_API_KEY):
+    - gcloud secrets create OPENAI_API_KEY --replication-policy=automatic
+    - echo -n "your-api-key" | gcloud secrets versions add OPENAI_API_KEY --data-file=-
+  - Repeat for each secret you need. You can also create/update secrets from the Cloud Console.
+- Add secret names to secrets.txt
+  - Create a file named secrets.txt in the repo root (commit it; it contains only names, not values).
+  - One secret name per line. Blank lines and lines starting with # are ignored.
+  - Example contents:
+    - # Secret names become ENV vars with the same name
+    - OPENAI_API_KEY
+    - GOOGLE_MAPS_API_KEY
+- Deploy
+  - Push to main (or your configured branch). The workflow will:
+    - Build and push the image to Artifact Registry.
+    - Deploy Cloud Run services with --set-secrets built from secrets.txt, mapping each name to :latest.
+- Notes
+  - This setup assumes secrets live in the same project as the Cloud Run services. Cross-project secrets would require adjusting the workflow to include a projects/PROJECT_ID/secrets/SECRET path.
+  - Rotating a secret is just adding a new version; the workflow uses :latest so redeploys pick up the newest version.
+  - If you see permission errors (403) at runtime or deploy:
+    - Verify the secret exists in the project.
+    - Ensure Terraform has been applied so the runtime service account has Secret Manager Secret Accessor.
 
 Security and safety notes
 - Never commit real secrets (OPENAI_API_KEY, GITHUB_TOKEN, serviceAccountKey.json).

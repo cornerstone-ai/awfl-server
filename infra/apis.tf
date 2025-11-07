@@ -50,3 +50,10 @@ resource "google_project_service" "sts" {
   service            = "sts.googleapis.com"
   disable_on_destroy = false
 }
+
+# Site Verification API for Search Console domain ownership
+resource "google_project_service" "siteverification" {
+  project            = var.project_id
+  service            = "siteverification.googleapis.com"
+  disable_on_destroy = false
+}
