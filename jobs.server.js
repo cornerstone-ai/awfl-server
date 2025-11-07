@@ -15,11 +15,11 @@ app.use(logging)
 
 // Health checks
 app.get('/healthz', (_req, res) => res.status(200).send('OK'))
-app.get('/jobs/healthz', (_req, res) => res.status(200).send('OK'))
+// app.get('/jobs/healthz', (_req, res) => res.status(200).send('OK'))
 
 // Mount under both root and /jobs for compatibility
 app.use('/', jobsRoutes)
-app.use('/jobs', jobsRoutes)
+// app.use('/jobs', jobsRoutes)
 
 // 404 fallback
 app.use((req, res) => {

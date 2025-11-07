@@ -15,12 +15,12 @@ app.use(logging)
 
 // Health checks
 app.get('/healthz', (_req, res) => res.status(200).send('OK'))
-app.get('/api/healthz', (_req, res) => res.status(200).send('OK'))
+// app.get('/api/healthz', (_req, res) => res.status(200).send('OK'))
 
 // Workflows (primary mount)
 app.use('/workflows', workflowsRoutes)
 // Back-compat for local/dev prefix
-app.use('/api/workflows', workflowsRoutes)
+// app.use('/api/workflows', workflowsRoutes)
 
 // 404 fallback
 app.use((req, res) => {

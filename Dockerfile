@@ -45,10 +45,14 @@ COPY . .
 # Environment
 ENV NODE_ENV=development
 
-# Expose ports
-EXPOSE 5000 4000
+# Expose ports (Cloud Run ignores EXPOSE but kept for clarity)
+EXPOSE 8080 5000 4000
 
-# Load secrets (if present) then start app
+# Load secrets helper and runtime entrypoint
+# Copy load-secrets.sh to /app and keep start.sh in scripts/
 COPY secrets.txt scripts/load-secrets.sh ./
-RUN chmod +x load-secrets.sh
-CMD ["npm", "run", "serve"]
+COPY scripts/start.sh scripts/start.sh
+RUN chmod +x load-secrets.sh scripts/start.sh
+
+# Start via start.sh so SERVICE_TARGET selects the entrypoint
+CMD ["scripts/start.sh"]

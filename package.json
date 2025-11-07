@@ -1,19 +1,19 @@
 {
-  "name": "functions",
-  "description": "Cloud Functions for Firebase",
+  "name": "awfl-server",
+  "description": "Express servers for API and Jobs (Cloud Run) with local dev via serve.js",
   "type": "module",
   "scripts": {
     "serve": "/app/load-secrets.sh secrets.txt; nodemon serve.js",
-    "shell": "firebase functions:shell",
-    "start": "npm run shell",
-    "deploy": "firebase deploy --only functions",
-    "logs": "firebase functions:log",
+    "start": "node serve.js",
+    "start:api": "node api.server.js",
+    "start:jobs": "node jobs.server.js",
+    "dev:api": "nodemon api.server.js",
+    "dev:jobs": "nodemon jobs.server.js",
     "test": "mocha test.js"
   },
   "engines": {
     "node": "22"
   },
-  "main": "index.js",
   "dependencies": {
     "@google-cloud/pubsub": "^5.1.0",
     "@google-cloud/tasks": "^6.1.0",
@@ -30,7 +30,6 @@
     "date-fns-tz": "^3.2.0",
     "express": "^4.21.1",
     "firebase-admin": "^13.0.1",
-    "firebase-functions": "^6.3.2",
     "google-auth-library": "^9.15.1",
     "googleapis": "^148.0.0",
     "libphonenumber-js": "^1.12.4",
@@ -43,7 +42,6 @@
     "twilio": "^5.4.4"
   },
   "devDependencies": {
-    "firebase-functions-test": "^0.2.0",
     "nodemon": "^3.1.10"
   },
   "private": true
