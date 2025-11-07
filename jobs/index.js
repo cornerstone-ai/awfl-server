@@ -14,6 +14,7 @@ import toolsRoutes from '../workflows/tools/index.js'
 import agentsRoutes from '../workflows/agents/index.js'
 import eventsRoutes from '../workflows/events/index.js'
 import { projectIdMiddleware } from '../workflows/projects/util.js';
+import callbacksRoutes from './callbacks/index.js'
 
 const router = express.Router();
 router.use(express.json());
@@ -42,5 +43,8 @@ router.use('/tasks', createTasksRouter());
 router.use('/agents', agentsRoutes);
 
 router.use('/events', eventsRoutes)
+
+// Callbacks creation (project-scoped)
+router.use('/callbacks', callbacksRoutes)
 
 export default router;
