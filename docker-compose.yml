@@ -20,6 +20,7 @@ services:
       - BASE_URL=${BASE_URL}
       - ALLOW_SKIP_AUTH=${ALLOW_SKIP_AUTH}
       - SERVICE_TARGET=dev
+      - ENCRYPTION_SECRET_KEY=${ENCRYPTION_SECRET_KEY}
     volumes:
       - ./serviceAccountKey.json:/app/serviceAccountKey.json
       - ./jobs:/app/jobs

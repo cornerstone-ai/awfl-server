@@ -15,6 +15,7 @@ import projectsRoutes from './projects/index.js'
 import { projectIdMiddleware } from './projects/util.js'
 import gitFilesRouter from './gitFiles.js';
 import callbacksRoutes from './callbacks/index.js'
+import credsRoutes from './creds/index.js'
 
 const router = express.Router()
 router.use(express.json())
@@ -40,6 +41,7 @@ router.use('/types', typesRoutes)
 router.use('/prompts', promptsRoutes)
 router.use('/services/git', gitFilesRouter)
 router.use('/workspace', workspaceRoutes)
+router.use('/creds', credsRoutes)
 
 // Callbacks invoke (project-scoped)
 router.use('/callbacks', callbacksRoutes)

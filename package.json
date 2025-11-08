@@ -3,7 +3,7 @@
   "description": "Express servers for API and Jobs (Cloud Run) with local dev via dev.js",
   "type": "module",
   "scripts": {
-    "dev": "nodemon dev.js",
+    "dev": "node dev.js",
     "start:api": "node api.server.js",
     "start:jobs": "node jobs.server.js",
     "dev:api": "nodemon api.server.js",

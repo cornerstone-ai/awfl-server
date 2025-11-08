@@ -1,12 +1,11 @@
 import express from 'express';
 import { OpenAI } from 'openai';
+import { getFirestore } from 'firebase-admin/firestore';
+import { getUserIdFromReq, userScopedCollectionPath } from '../workflows/utils.js';
+import { decryptString } from '../workflows/crypto.js';
 
 const router = express.Router();
-
-// Initialize OpenAI client (expects process.env.OPENAI_API_KEY)
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || "mock",
-});
+const db = getFirestore();
 
 // Pricing per 1,000,000 tokens in USD for OpenAI models (as of May 2025)
 const PRICING = {
@@ -60,9 +59,35 @@ function resolveMaxTokens(model, fallback = 16384) {
   return MAX_TOKENS[model] || fallback;
 }
 
+async function getOpenAIKeyForUser(userId) {
+  const docRef = db.collection(userScopedCollectionPath(userId, 'creds')).doc('openai');
+  const snap = await docRef.get();
+  if (!snap.exists) return null;
+  const data = snap.data() || {};
+  try {
+    return decryptString(data.enc);
+  } catch (e) {
+    console.error('[llm] decrypt openai cred failed:', e?.message || e);
+    throw new Error('Failed to decrypt stored OpenAI credential');
+  }
+}
+
 router.post('/chat', async (req, res) => {
   try {
     console.log(`Chat request: ${JSON.stringify(req.body, null, 2)}`);
+
+    const userId = await getUserIdFromReq(req);
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized: missing or invalid user' });
+    }
+
+    const apiKey = await getOpenAIKeyForUser(userId);
+    if (!apiKey) {
+      return res.status(400).json({ error: 'Missing OpenAI credential for user. Set it via POST /workflows/creds/openai with { value: "sk-..." }.' });
+    }
+
+    const client = new OpenAI({ apiKey });
+
     // Accept both max_completion_tokens (preferred) and legacy max_tokens
     const { messages, model = 'gpt-4', temperature = 0.7, max_tokens, max_completion_tokens, response_format, tools, tool_choice } = req.body;
 
@@ -72,7 +97,7 @@ router.post('/chat', async (req, res) => {
 
     const resolvedMaxTokens = (max_completion_tokens ?? max_tokens) ?? resolveMaxTokens(model);
 
-    const response = await openai.chat.completions.create({
+    const response = await client.chat.completions.create({
       model,
       messages,
       temperature: fixed_temperature(model, temperature),
@@ -86,23 +111,8 @@ router.post('/chat', async (req, res) => {
 
     const choice = response.choices?.[0];
     const message = choice?.message
-    // const reply = choice?.message?.content || '';
-    // const tool_calls = choice?.message?.tool_calls || [];
     const usage = response.usage;
     const total_cost = estimateCost(model, usage);
-
-    // let result;
-    // if (tool_calls && tool_calls.length) {
-    //   result = { tool_calls };
-    // } else if (response_format?.type === 'json_object') {
-    //   try {
-    //     result = reply ? JSON.parse(reply) : {};
-    //   } catch (e) {
-    //     result = {};
-    //   }
-    // } else {
-    //   result = { reply };
-    // }
 
     res.status(200).json({ message, usage, total_cost });
   } catch (error) {
