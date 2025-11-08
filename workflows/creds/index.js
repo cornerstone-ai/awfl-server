@@ -1,7 +1,7 @@
 import express from 'express';
 import { getFirestore } from 'firebase-admin/firestore';
 import { userScopedCollectionPath } from '../utils.js';
-import { encryptString, decryptString } from '../crypto.js';
+import { encryptString } from '../crypto.js';
 
 const router = express.Router();
 const db = getFirestore();
@@ -79,43 +79,6 @@ router.get('/', async (req, res) => {
   } catch (err) {
     console.error('[creds] list failed', err?.message || err);
     return res.status(500).json({ error: 'Failed to list credentials' });
-  }
-});
-
-// Get a single credential (optionally decrypted)
-// Query: ?raw=1 to include plaintext value
-router.get('/:provider', async (req, res) => {
-  try {
-    const userId = req.userId;
-    if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
-
-    const { provider } = req.params;
-    const raw = String(req.query?.raw || '').trim() === '1';
-
-    const docRef = credsCollection(userId).doc(provider);
-    const snap = await docRef.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Credential not found' });
-    const v = snap.data() || {};
-
-    const resp = {
-      id: v.id || provider,
-      provider: v.provider || provider,
-      last4: v.last4 || null,
-      updated: v.updated || null,
-    };
-
-    if (raw) {
-      try {
-        resp.value = decryptString(v.enc);
-      } catch (e) {
-        return res.status(500).json({ error: 'Failed to decrypt credential' });
-      }
-    }
-
-    return res.status(200).json({ cred: resp });
-  } catch (err) {
-    console.error('[creds] get failed', err?.message || err);
-    return res.status(500).json({ error: 'Failed to get credential' });
   }
 });
 
