@@ -21,6 +21,9 @@ jobs:
       CLOUD_RUN_RUNTIME_SA: ${{ vars.CLOUD_RUN_RUNTIME_SA }}
       CLOUD_RUN_API_SERVICE: ${{ vars.CLOUD_RUN_API_SERVICE }}
       CLOUD_RUN_JOBS_SERVICE: ${{ vars.CLOUD_RUN_JOBS_SERVICE }}
+      # Disable any gcloud interactive prompts in CI
+      CLOUDSDK_CORE_DISABLE_PROMPTS: '1'
+      CLOUDSDK_COMPONENT_MANAGER_DISABLE_UPDATE_CHECK: '1'
 
     steps:
       - uses: actions/checkout@v4
@@ -49,6 +52,14 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
+          install_components: beta
+
+      - name: Ensure gcloud beta component is installed (non-interactive)
+        run: |
+          set -euo pipefail
+          gcloud components install beta --quiet
+          # Sanity check to ensure beta is available and suppress any prompts
+          gcloud --quiet beta --version >/dev/null || true
 
       - name: Configure gcloud
         run: |
@@ -83,7 +94,7 @@ jobs:
 
             echo "Creating index for collectionGroup=${collection}, queryScope=${scope}"
             # shellcheck disable=SC2086
-            gcloud beta firestore indexes composite create \
+            gcloud --quiet beta firestore indexes composite create \
               --collection-group="${collection}" \
               --query-scope="${scope}" \
               ${fieldFlags[*]} \
@@ -125,6 +136,7 @@ jobs:
       - name: Deploy API service (public)
         run: |
           gcloud run deploy "${CLOUD_RUN_API_SERVICE}" \
+            --quiet \
             --region="${GCP_REGION}" \
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
@@ -136,6 +148,7 @@ jobs:
       - name: Deploy Jobs service (auth-required)
         run: |
           gcloud run deploy "${CLOUD_RUN_JOBS_SERVICE}" \
+            --quiet \
             --region="${GCP_REGION}" \
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
@@ -145,7 +158,8 @@ jobs:
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
 # Notes:
-# - This workflow now uses image-based Cloud Run deploys (no Cloud Build staging bucket),
+# - This workflow uses image-based Cloud Run deploys (no Cloud Build staging bucket),
 #   which avoids the storage.buckets.create permission requirement.
 # - Ensure `infra` is applied so the Artifact Registry repo `app` exists and IAM bindings are in place.
 # - The same image is deployed to both services; SERVICE_TARGET selects the entrypoint at runtime.
+# - Firestore index creation explicitly pre-installs the gcloud beta component and uses --quiet for non-interactive CI.
