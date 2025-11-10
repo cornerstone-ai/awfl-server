@@ -89,8 +89,16 @@ jobs:
             collection=$(echo "$idx" | jq -r '.collectionGroup')
             scope=$(echo "$idx" | jq -r '.queryScope // "COLLECTION"')
 
-            # Build repeated --field-config flags
-            mapfile -t fieldFlags < <(echo "$idx" | jq -r '.fields[] | if has("order") then "--field-config=fieldPath=" + .fieldPath + ",order=" + .order else "--field-config=fieldPath=" + .fieldPath + ",array-config=" + .arrayConfig end')
+            # Build repeated --field-config flags with correct keys
+            mapfile -t fieldFlags < <(
+              echo "$idx" | jq -r '
+                .fields[] |
+                if has("order") then
+                  "--field-config=field-path=" + .fieldPath + ",order=" + .order
+                else
+                  "--field-config=field-path=" + .fieldPath + ",array-config=" + .arrayConfig
+                end'
+            )
 
             echo "Creating index for collectionGroup=${collection}, queryScope=${scope}"
             # shellcheck disable=SC2086
@@ -110,13 +118,13 @@ jobs:
           if [[ -f secrets.txt ]]; then
             secret_list=$(grep -vE '^\s*#' secrets.txt | grep -vE '^\s*$' | awk '{print $1"="$1":latest"}' | paste -sd "," -)
             if [[ -n "${secret_list}" ]]; then
-              echo "SECRET_FLAGS=--set-secrets=${secret_list}" >> $GITHUB_OUTPUT
+              echo "SECRET_FLAGS=--set-secrets=${secret_list}" >> "$GITHUB_OUTPUT"
             else
-              echo "SECRET_FLAGS=" >> $GITHUB_OUTPUT
+              echo "SECRET_FLAGS=" >> "$GITHUB_OUTPUT"
             fi
           else
             echo "secrets.txt not found; continuing without --set-secrets"
-            echo "SECRET_FLAGS=" >> $GITHUB_OUTPUT
+            echo "SECRET_FLAGS=" >> "$GITHUB_OUTPUT"
           fi
 
       # Switch to image-based deploys (no GCS staging bucket required)
