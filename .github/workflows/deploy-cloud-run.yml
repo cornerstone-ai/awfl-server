@@ -129,6 +129,7 @@ jobs:
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --allow-unauthenticated \
+            --timeout=3600 \
             --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:api,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
@@ -139,6 +140,7 @@ jobs:
             --image="${{ steps.image.outputs.IMAGE_URI }}" \
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --no-allow-unauthenticated \
+            --timeout=3600 \
             --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:jobs,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
