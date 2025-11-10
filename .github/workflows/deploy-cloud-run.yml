@@ -55,6 +55,41 @@ jobs:
           gcloud config set project "${GCP_PROJECT_ID}"
           gcloud config set run/region "${GCP_REGION}"
 
+      # Deploy Firestore composite indexes using gcloud (WIF auth)
+      - name: Deploy Firestore indexes (from firestore.indexes.json)
+        if: ${{ hashFiles('firestore.indexes.json') != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          FILE="firestore.indexes.json"
+          if [[ ! -f "$FILE" ]]; then
+            echo "No $FILE found; skipping Firestore indexes deploy"
+            exit 0
+          fi
+
+          count=$(jq '.indexes | length' "$FILE")
+          if [[ "$count" -eq 0 ]]; then
+            echo "No composite indexes defined; skipping"
+            exit 0
+          fi
+
+          # Iterate indexes and create via gcloud
+          jq -c '.indexes[]' "$FILE" | while read -r idx; do
+            collection=$(echo "$idx" | jq -r '.collectionGroup')
+            scope=$(echo "$idx" | jq -r '.queryScope // "COLLECTION"')
+
+            # Build repeated --field-config flags
+            mapfile -t fieldFlags < <(echo "$idx" | jq -r '.fields[] | if has("order") then "--field-config=fieldPath=" + .fieldPath + ",order=" + .order else "--field-config=fieldPath=" + .fieldPath + ",array-config=" + .arrayConfig end')
+
+            echo "Creating index for collectionGroup=${collection}, queryScope=${scope}"
+            # shellcheck disable=SC2086
+            gcloud beta firestore indexes composite create \
+              --collection-group="${collection}" \
+              --query-scope="${scope}" \
+              ${fieldFlags[*]} \
+              || echo "Index may already exist or is being built; continuing"
+          done
+
       # Build --set-secrets flag from secrets.txt (Secret Manager keys listed one per line)
       - name: Build --set-secrets flag from secrets.txt
         id: secrets
