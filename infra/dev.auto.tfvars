@@ -2,7 +2,7 @@ project_id        = "awfl-us"
 root_domain       = "awfl.us"
 github_repository = "awfl-us/server"
 
-enable_domain_mappings = false
+cloud_run_services_exist = false
 
 # Optional: Firestore database location (immutable after creation)
 # Multi-region recommended: nam5 (North America) or eur3 (Europe)

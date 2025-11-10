@@ -153,14 +153,14 @@ CI deploys Cloud Run services on merge
 Domain verification and Cloud Run domain mappings (two-step)
 - Overview
   - Terraform in infra manages Google Search Console site verification via DNS and, optionally, Cloud Run domain mappings and DNS records for api.<root_domain> and jobs.<root_domain>.
-  - Because Cloud Run domain mappings must point to existing services, we use a toggle enable_domain_mappings (default false) to decouple verification/DNS from mappings.
+  - Because Cloud Run domain mappings must point to existing services, we use a toggle cloud_run_services_exist (default false) to decouple verification/DNS from mappings and post-deploy lookups.
 - Application Default Credentials (ADC) requirement
   - The google provider uses ADC. To call the Site Verification API during apply, you must authenticate with a user credential that has the siteverification scope.
   - Run: gcloud auth application-default login --scopes=https://www.googleapis.com/auth/siteverification
     - This opens a browser and redirects to http://localhost:8085 for the OAuth callback. If a browser can’t be launched, use --no-launch-browser to copy/paste the URL.
     - To reset ADC later: gcloud auth application-default revoke (then login again as needed).
 - Step 1: Create DNS zone and TXT (verification) record
-  - In infra/dev.auto.tfvars, set root_domain = "yourdomain.tld" and leave enable_domain_mappings = false (default).
+  - In infra/dev.auto.tfvars, set root_domain = "yourdomain.tld" and leave cloud_run_services_exist = false (default).
   - terraform apply will:
     - Create a public Cloud DNS managed zone for the root domain and output dns_nameservers.
     - Create the site verification TXT record in that zone.
@@ -171,11 +171,17 @@ Domain verification and Cloud Run domain mappings (two-step)
   - Confirm the service names match what infra expects (defaults are api and jobs; the domain mappings refer to these names).
 - Step 3: Enable domain mappings and create CNAMEs
   - Do not commit this toggle; use a local override file that is gitignored:
-    - Create infra/dev.local.auto.tfvars with: enable_domain_mappings = true
+    - Create infra/dev.local.auto.tfvars with: cloud_run_services_exist = true
   - terraform apply will then create:
     - google_cloud_run_domain_mapping resources for api.<root_domain> and jobs.<root_domain>
     - CNAME records pointing to ghs.googlehosted.com for those subdomains
   - After certificate provisioning completes (managed by Cloud Run), your subdomains should serve the respective services.
+
+Migration note (infra variable rename)
+- The old toggle enable_domain_mappings is replaced by cloud_run_services_exist (default false).
+- Before the first deploy, keep cloud_run_services_exist = false so terraform apply succeeds without the Cloud Run services.
+- After the initial deploy (services exist), set cloud_run_services_exist = true via a local override file (infra/dev.local.auto.tfvars) or CLI: -var='cloud_run_services_exist=true'.
+- The infra also now conditionally looks up Cloud Run service URLs for GitHub Actions variables. When false, WORKFLOWS_BASE_URL falls back to https://jobs.<root_domain>.
 
 Firebase Web App (client config)
 - After apply, retrieve outputs:

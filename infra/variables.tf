@@ -27,10 +27,12 @@ variable "github_repository" {
   type        = string
 }
 
-# Whether to create Cloud Run Domain Mappings and associated DNS records.
-# Set to true only after the target Cloud Run services (api, jobs) exist in the project/region.
-variable "enable_domain_mappings" {
-  description = "Create Cloud Run domain mappings and DNS records (requires services to already exist)"
+# Whether Cloud Run services (api, jobs) already exist in the project/region.
+# When true, enable resources and lookups that require the services to exist (e.g.,
+# Cloud Run Domain Mappings, DNS records, and service URL data sources).
+# Keep false for the very first apply prior to deploying services via CI/CD.
+variable "cloud_run_services_exist" {
+  description = "Toggle features that require existing Cloud Run services (domain mappings, DNS, data lookups)"
   type        = bool
   default     = false
 }

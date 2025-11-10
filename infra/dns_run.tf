@@ -19,7 +19,7 @@ output "dns_nameservers" {
 
 # Map api.<root_domain> to Cloud Run service "api"
 resource "google_cloud_run_domain_mapping" "api" {
-  count    = var.enable_domain_mappings ? 1 : 0
+  count    = var.cloud_run_services_exist ? 1 : 0
   provider = google-beta
   location = var.region
   name     = "api.${var.root_domain}"
@@ -42,7 +42,7 @@ resource "google_cloud_run_domain_mapping" "api" {
 
 # Map jobs.<root_domain> to Cloud Run service "jobs"
 resource "google_cloud_run_domain_mapping" "jobs" {
-  count    = var.enable_domain_mappings ? 1 : 0
+  count    = var.cloud_run_services_exist ? 1 : 0
   provider = google-beta
   location = var.region
   name     = "jobs.${var.root_domain}"
@@ -66,11 +66,11 @@ resource "google_cloud_run_domain_mapping" "jobs" {
 # ------------------------------
 # DNS records for Cloud Run domain mappings
 # For subdomains, Cloud Run requires a CNAME to ghs.googlehosted.com.
-# Use static records; create them only when domain mappings are enabled.
+# Use static records; create them only when services exist and mappings are enabled.
 # ------------------------------
 
 resource "google_dns_record_set" "api_cname" {
-  count        = var.enable_domain_mappings ? 1 : 0
+  count        = var.cloud_run_services_exist ? 1 : 0
   managed_zone = google_dns_managed_zone.root.name
   name         = "api.${var.root_domain}."
   type         = "CNAME"
@@ -85,7 +85,7 @@ resource "google_dns_record_set" "api_cname" {
 }
 
 resource "google_dns_record_set" "jobs_cname" {
-  count        = var.enable_domain_mappings ? 1 : 0
+  count        = var.cloud_run_services_exist ? 1 : 0
   managed_zone = google_dns_managed_zone.root.name
   name         = "jobs.${var.root_domain}."
   type         = "CNAME"

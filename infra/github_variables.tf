@@ -7,6 +7,22 @@ locals {
   default_compute_sa = "${data.google_project.project.number}-compute@developer.gserviceaccount.com"
 }
 
+# Optionally lookup Cloud Run service URLs only after services exist
+# This is gated so that terraform apply works before the first deploy
+data "google_cloud_run_service" "api" {
+  count    = var.cloud_run_services_exist ? 1 : 0
+  name     = "api"
+  location = var.region
+  project  = var.project_id
+}
+
+data "google_cloud_run_service" "jobs" {
+  count    = var.cloud_run_services_exist ? 1 : 0
+  name     = "jobs"
+  location = var.region
+  project  = var.project_id
+}
+
 resource "local_file" "actions_variables" {
   filename = "${path.module}/../.github/actions-variables.json"
   content  = jsonencode({
@@ -17,6 +33,8 @@ resource "local_file" "actions_variables" {
     CLOUD_RUN_RUNTIME_SA   = local.default_compute_sa
     CLOUD_RUN_API_SERVICE  = "api"
     CLOUD_RUN_JOBS_SERVICE = "jobs"
+    # Use Cloud Run Jobs service URL when available; otherwise provide a safe placeholder
+    WORKFLOWS_BASE_URL     = var.cloud_run_services_exist ? data.google_cloud_run_service.jobs[0].status[0].url : "https://jobs.${var.root_domain}"
   })
   depends_on = [
     google_iam_workload_identity_pool_provider.github,
