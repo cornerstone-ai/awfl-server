@@ -34,3 +34,29 @@ variable "enable_domain_mappings" {
   type        = bool
   default     = false
 }
+
+# ------------------------------
+# Remote state settings for the web (frontend) stack
+# ------------------------------
+variable "web_tfstate_bucket_name" {
+  description = "GCS bucket name that hosts the web (frontend) Terraform state"
+  type        = string
+  # Default provided per user: the web repo manages this bucket
+  default     = "tfstate-awfl-web"
+}
+
+variable "web_tfstate_prefix" {
+  description = "Object prefix (folder) within the web state bucket (e.g., workspace path)"
+  type        = string
+  # Default provided per user for prod
+  default     = "infra/envs/prod"
+}
+
+# ------------------------------
+# DNS defaults
+# ------------------------------
+variable "dns_default_ttl" {
+  description = "Default TTL (seconds) to apply to DNS records when TTL is not provided by remote state"
+  type        = number
+  default     = 300
+}

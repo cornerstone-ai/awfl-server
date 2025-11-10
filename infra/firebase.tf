@@ -56,6 +56,8 @@ resource "google_identity_platform_config" "default" {
   authorized_domains = [
     "localhost",                    # local dev (all ports, e.g., Vite 5173)
     "127.0.0.1",                    # loopback
+    var.root_domain,
+    "www.${var.root_domain}",
     "${var.project_id}.firebaseapp.com", # default Firebase Hosting domain
     "${var.project_id}.web.app"          # default Firebase Hosting domain
   ]
