@@ -208,7 +208,7 @@ Deployment (example: Cloud Run)
     --platform managed \
     --region us-central1 \
     --allow-unauthenticated \
-    --set-env-vars "NODE_ENV=production,BASE_URL=https://YOUR_DOMAIN" \
+    --set-env-vars "NODE_ENV=production,WORKFLOW_ENV=Prod,BASE_URL=https://YOUR_DOMAIN" \
     --update-secrets "GOOGLE_APPLICATION_CREDENTIALS=projects/PROJECT_ID/secrets/SVC_KEY:latest"
 - Ensure Firestore (or emulator in dev) and any external APIs are reachable from the environment.
 

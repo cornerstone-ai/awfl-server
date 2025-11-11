@@ -18,10 +18,10 @@ export const toSeconds = (v) => {
 };
 
 // Ensure workflow name matches execution naming used by /workflows/execute
-// Appends AWFL_WORKFLOW_ENV if set and not already present at the end of the name
+// Appends WORKFLOW_ENV if set and not already present at the end of the name
 export function withEnvSuffix(name) {
   const n = String(name || '').trim();
-  const suffix = process.env.AWFL_WORKFLOW_ENV || '';
+  const suffix = process.env.WORKFLOW_ENV || '';
   if (!suffix) return n;
   return n.endsWith(suffix) ? n : `${n}${suffix}`;
 }
