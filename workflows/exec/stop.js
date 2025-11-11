@@ -95,7 +95,7 @@ router.post('/stop', async (req, res) => {
     const region = process.env.WORKFLOWS_LOCATION || 'us-central1';
 
     // Determine candidate workflows to try for cancellation.
-    // Combine explicit request body (workflow/workflows) with env WORKFLOWS_CANCEL_WORKFLOWS, applying the same WORKFLOW_ENV suffixing used by /execute.
+    // Combine explicit request body (workflow/workflows) with env WORKFLOWS_CANCEL_WORKFLOWS, applying the same AWFL_WORKFLOW_ENV suffixing used by /execute.
     const bodyWorkflowsRaw = [];
     if (typeof workflow === 'string') bodyWorkflowsRaw.push(workflow.trim());
     if (Array.isArray(workflows)) {
@@ -127,7 +127,7 @@ router.post('/stop', async (req, res) => {
     if (workflowsToTry.length === 0) {
       return res.status(400).json({
         error: 'No workflows provided and WORKFLOWS_CANCEL_WORKFLOWS is not configured',
-        hint: 'Pass body.workflow or body.workflows, or set WORKFLOWS_CANCEL_WORKFLOWS (optionally with WORKFLOW_ENV) env var',
+        hint: 'Pass body.workflow or body.workflows, or set WORKFLOWS_CANCEL_WORKFLOWS (optionally with AWFL_WORKFLOW_ENV) env var',
       });
     }
 

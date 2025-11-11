@@ -71,7 +71,7 @@ router.post('/execute', async (req, res) => {
     }
 
     const region = location || process.env.WORKFLOWS_LOCATION || 'us-central1';
-    const workflowWithEnv = `${workflowName}${process.env.WORKFLOW_ENV || ''}`;
+    const workflowWithEnv = `${workflowName}${process.env.AWFL_WORKFLOW_ENV || ''}`;
 
     // Resolve BASE_URL from environment
     const baseUrl = process.env.BASE_URL || process.env.WORKFLOWS_BASE_URL || process.env.PUBLIC_BASE_URL;

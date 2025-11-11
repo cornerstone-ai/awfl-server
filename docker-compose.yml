@@ -14,7 +14,7 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - GOOGLE_APPLICATION_CREDENTIALS=/app/serviceAccountKey.json
       - FIRESTORE_EMULATOR_HOST=firestore-emulator:8085
-      - WORKFLOW_ENV=Dev
+      - AWFL_WORKFLOW_ENV=Dev
       - CHROMIUM_PATH=/usr/bin/headless-chromium
       - WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL}
       - ALLOW_SKIP_AUTH=${ALLOW_SKIP_AUTH}
