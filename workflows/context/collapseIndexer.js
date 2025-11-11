@@ -165,7 +165,7 @@ router.post('/collapse/state/set', async (req, res) => {
     }
 
     const db = getFirestore();
-    const scopedSessionsPath = projectScopedCollectionPath(userId, projectId, 'convo.sessions');
+    const scopedSessionsPath = projectScopedCollectionPath(userId, req.projectId, 'convo.sessions');
     const sessionDoc = db.collection(scopedSessionsPath).doc(String(sessionId));
     const collapsedIdxDoc = sessionDoc.collection('indexes').doc('collapsed');
 
