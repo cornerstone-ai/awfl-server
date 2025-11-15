@@ -1,9 +1,11 @@
-project_id        = "awfl-us"
-root_domain       = "awfl.us"
-github_repository = "awfl-us/server"
+project_id        = "cornerstoneai-org"
+root_domain       = "cornerstoneai.org"
+github_repository = "cornerstone-ai/awfl-server"
 
 cloud_run_services_exist = false
-enable_site_verification = false
+enable_site_verification = true
+
+firebase_web_app_display_name = "cornerstoneai-web"
 
 # Optional: Firestore database location (immutable after creation)
 # Multi-region recommended: nam5 (North America) or eur3 (Europe)
