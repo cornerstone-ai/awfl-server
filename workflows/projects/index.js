@@ -232,4 +232,45 @@ router.post('/:id/consumer-lock/release', async (req, res) => {
   }
 });
 
+// Get consumer lock status
+// Endpoint: GET /:id/consumer-lock/status
+// Response: { ok, active, now, lock?: { consumerId, consumerType, leaseMs, acquiredAt, refreshedAt, expiresAt, expiresInMs } }
+router.get('/:id/consumer-lock/status', async (req, res) => {
+  try {
+    const userId = req.userId;
+    if (!userId) return res.status(401).json({ error: 'Unauthorized: missing req.userId' });
+    const { id } = req.params;
+
+    const ref = projectDoc(userId, id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: 'Project not found' });
+
+    const now = Date.now();
+    const lock = snap.get('consumerLock') || null;
+    if (!lock) return res.status(200).json({ ok: true, active: false, now, lock: null });
+
+    const consumerId = lock?.consumerId || lock?.holderId || null;
+    const expiresAt = Number(lock?.expiresAt || 0);
+    const active = !!(consumerId && expiresAt > now);
+
+    return res.status(200).json({
+      ok: true,
+      active,
+      now,
+      lock: {
+        consumerId,
+        consumerType: lock?.consumerType || null,
+        leaseMs: lock?.leaseMs ?? null,
+        acquiredAt: lock?.acquiredAt ?? null,
+        refreshedAt: lock?.refreshedAt ?? null,
+        expiresAt: expiresAt || null,
+        expiresInMs: Math.max(0, expiresAt - now),
+      },
+    });
+  } catch (err) {
+    console.error('[projects] consumer-lock status failed', err);
+    return res.status(500).json({ error: 'Failed to get consumer lock status' });
+  }
+});
+
 export default router;
