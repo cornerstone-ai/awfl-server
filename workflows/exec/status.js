@@ -74,7 +74,7 @@ router.get('/status/latest/:sessionId', async (req, res) => {
       items.map(async (it) => {
         try {
           const snap = await db.collection(statusesCollection).doc(it.execId).get();
-          if (!snap.exists) return { ...it, status: 'UNKNOWN' };
+          if (!snap.exists) return { ...it, /*status: 'UNKNOWN'*/ };
           const data = snap.data() || {};
           return { ...it, ...data };
         } catch (e) {
