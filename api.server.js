@@ -7,7 +7,7 @@ app.use(express.json({ limit: '1mb' }))
 // --- CORS for prod (api.awfl.us) ---
 const ALLOWED_ORIGIN = process.env.CORS_ALLOW_ORIGIN || 'https://awfl.us'
 const ALLOWED_METHODS = 'GET, POST, PUT, PATCH, DELETE, OPTIONS'
-const ALLOWED_HEADERS = 'Authorization, Content-Type, x-project-id'
+const ALLOWED_HEADERS = 'Authorization, Content-Type, x-project-id, x-consumer-id'
 const MAX_AGE = process.env.CORS_MAX_AGE || '600'
 const ALLOW_CREDENTIALS = process.env.CORS_ALLOW_CREDENTIALS === 'true'
 
