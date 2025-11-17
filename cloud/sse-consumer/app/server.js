@@ -6,11 +6,12 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import { exec } from 'child_process';
+import { ensureWorkRoot, resolveWithin as resolveWithinRoot } from './storage.js';
 
 // Env helpers
 const PORT = process.env.PORT || 8080;
 const SERVICE_AUTH_TOKEN = process.env.SERVICE_AUTH_TOKEN || '';
-const WORK_ROOT = path.resolve(process.env.WORK_ROOT || '/mnt/work');
+const WORK_ROOT_BASE = path.resolve(process.env.WORK_ROOT || '/mnt/work');
 const WORKFLOWS_BASE_URL = process.env.WORKFLOWS_BASE_URL || '';
 const WORKFLOWS_AUDIENCE = process.env.WORKFLOWS_AUDIENCE || WORKFLOWS_BASE_URL;
 const EVENTS_HEARTBEAT_MS = Number(process.env.EVENTS_HEARTBEAT_MS || 15000);
@@ -36,20 +37,11 @@ function checkInboundAuth(req, res) {
   return true;
 }
 
-// Utility: ensure path is within WORK_ROOT
-function resolveWithinWorkRoot(rel) {
-  const target = path.resolve(WORK_ROOT, rel);
-  if (!target.startsWith(WORK_ROOT + path.sep) && target !== WORK_ROOT) {
-    throw new Error('Path escapes WORK_ROOT');
-  }
-  return target;
-}
-
-// Tool handlers
-async function handleUpdateFile(args) {
+// Tool handlers (parameterized per-request)
+async function doUpdateFile(args, resolvePath) {
   if (!args || typeof args.filepath !== 'string') throw new Error('UPDATE_FILE: missing filepath');
   const content = typeof args.content === 'string' ? args.content : '';
-  const abs = resolveWithinWorkRoot(args.filepath);
+  const abs = resolvePath(args.filepath);
   await fsp.mkdir(path.dirname(abs), { recursive: true });
   await fsp.writeFile(abs, content, 'utf8');
   const st = await fsp.stat(abs);
@@ -77,9 +69,9 @@ async function readFirstNBytes(absPath, n) {
   });
 }
 
-async function handleReadFile(args) {
+async function doReadFile(args, resolvePath) {
   if (!args || typeof args.filepath !== 'string') throw new Error('READ_FILE: missing filepath');
-  const abs = resolveWithinWorkRoot(args.filepath);
+  const abs = resolvePath(args.filepath);
   const st = await fsp.stat(abs).catch(() => null);
   if (!st || !st.isFile()) throw new Error('READ_FILE: not found or not a file');
   let content = '';
@@ -93,10 +85,10 @@ async function handleReadFile(args) {
   return { ok: true, filepath: args.filepath, content, truncated };
 }
 
-function execCommand(command) {
+function execCommand(command, workRoot) {
   return new Promise((resolve) => {
     const timeoutMs = RUN_COMMAND_TIMEOUT_SECONDS * 1000;
-    exec(command, { cwd: WORK_ROOT, timeout: timeoutMs, maxBuffer: OUTPUT_MAX_BYTES }, (error, stdout, stderr) => {
+    exec(command, { cwd: workRoot, timeout: timeoutMs, maxBuffer: OUTPUT_MAX_BYTES }, (error, stdout, stderr) => {
       const result = {
         ok: !error,
         exitCode: typeof error?.code === 'number' ? error.code : 0,
@@ -112,11 +104,11 @@ function execCommand(command) {
   });
 }
 
-async function handleRunCommand(args) {
+async function doRunCommand(args, workRoot) {
   if (!args || typeof args.command !== 'string') throw new Error('RUN_COMMAND: missing command');
   // Execute via bash -lc for simple shell semantics
   const command = `bash -lc ${JSON.stringify(args.command)}`;
-  const res = await execCommand(command);
+  const res = await execCommand(command, workRoot);
   return res;
 }
 
@@ -176,7 +168,7 @@ function parseToolArgs(maybe) {
 }
 
 // SSE consumer loop
-function startConsumer({ userId, projectId, workspaceId, sessionId, since_id, since_time, res }) {
+function startConsumer({ userId, projectId, workspaceId, sessionId, since_id, since_time, res, workRoot }) {
   let aborted = false;
   let lastEventId = undefined;
   let reconnectDelay = RECONNECT_BACKOFF_MS;
@@ -189,6 +181,8 @@ function startConsumer({ userId, projectId, workspaceId, sessionId, since_id, si
     'X-Project-Id': projectId,
     ...(workspaceId ? { 'X-Workspace-Id': workspaceId } : {}),
   };
+
+  const resolvePath = (rel) => resolveWithinRoot(workRoot, rel);
 
   async function connect(initial = false) {
     if (aborted) return;
@@ -286,13 +280,13 @@ function startConsumer({ userId, projectId, workspaceId, sessionId, since_id, si
     try {
       switch (tool) {
         case 'UPDATE_FILE':
-          result = await handleUpdateFile(args);
+          result = await doUpdateFile(args, resolvePath);
           break;
         case 'READ_FILE':
-          result = await handleReadFile(args);
+          result = await doReadFile(args, resolvePath);
           break;
         case 'RUN_COMMAND':
-          result = await handleRunCommand(args);
+          result = await doRunCommand(args, workRoot);
           break;
         default:
           throw new Error(`Unsupported tool: ${tool}`);
@@ -337,11 +331,12 @@ function startConsumer({ userId, projectId, workspaceId, sessionId, since_id, si
   connect(true).catch(() => {});
 }
 
+// Updated to accept context from headers if query params are not provided
 app.get('/sessions/consume', async (req, res) => {
   if (!checkInboundAuth(req, res)) return;
-  const userId = String(req.query.userId || '');
-  const projectId = String(req.query.projectId || '');
-  const workspaceId = req.query.workspaceId ? String(req.query.workspaceId) : '';
+  const userId = String(req.query.userId || req.headers['x-user-id'] || '');
+  const projectId = String(req.query.projectId || req.headers['x-project-id'] || '');
+  const workspaceId = req.query.workspaceId ? String(req.query.workspaceId) : String(req.headers['x-workspace-id'] || '');
   const sessionId = req.query.sessionId ? String(req.query.sessionId) : '';
   const since_id = req.query.since_id ? String(req.query.since_id) : '';
   const since_time = req.query.since_time ? String(req.query.since_time) : '';
@@ -353,12 +348,20 @@ app.get('/sessions/consume', async (req, res) => {
     return res.status(500).json({ error: 'WORKFLOWS_BASE_URL not configured' });
   }
 
-  // Check WORK_ROOT availability
+  // Ensure base mount availability
   try {
-    await fsp.mkdir(WORK_ROOT, { recursive: true });
-    await fsp.access(WORK_ROOT, fs.constants.W_OK | fs.constants.R_OK);
+    await fsp.mkdir(WORK_ROOT_BASE, { recursive: true });
+    await fsp.access(WORK_ROOT_BASE, fs.constants.W_OK | fs.constants.R_OK);
   } catch (err) {
-    return res.status(500).json({ error: 'WORK_ROOT not accessible', details: err?.message });
+    return res.status(500).json({ error: 'WORK_ROOT base not accessible', details: err?.message });
+  }
+
+  // Ensure per-context work root
+  let workRoot;
+  try {
+    workRoot = await ensureWorkRoot({ userId, projectId, workspaceId, sessionId });
+  } catch (err) {
+    return res.status(500).json({ error: 'work root init failed', details: err?.message });
   }
 
   // Long-lived response
@@ -368,7 +371,126 @@ app.get('/sessions/consume', async (req, res) => {
 
   res.write(`starting ${Date.now()}\n`);
 
-  startConsumer({ userId, projectId, workspaceId, sessionId, since_id, since_time, res });
+  startConsumer({ userId, projectId, workspaceId, sessionId, since_id, since_time, res, workRoot });
+});
+
+// Stateless streaming push endpoint (no outbound callbacks)
+// Accepts NDJSON in the request body; writes NDJSON results to the response.
+// One line in, one line out. Context is provided via headers or query.
+app.post('/sessions/stream', async (req, res) => {
+  if (!checkInboundAuth(req, res)) return;
+
+  const userId = String(req.query.userId || req.headers['x-user-id'] || '');
+  const projectId = String(req.query.projectId || req.headers['x-project-id'] || '');
+  const workspaceId = req.query.workspaceId ? String(req.query.workspaceId) : String(req.headers['x-workspace-id'] || '');
+  const sessionId = req.query.sessionId ? String(req.query.sessionId) : '';
+
+  if (!userId || !projectId) {
+    return res.status(400).json({ error: 'userId and projectId are required' });
+  }
+
+  // Ensure base mount availability
+  try {
+    await fsp.mkdir(WORK_ROOT_BASE, { recursive: true });
+    await fsp.access(WORK_ROOT_BASE, fs.constants.W_OK | fs.constants.R_OK);
+  } catch (err) {
+    return res.status(500).json({ error: 'WORK_ROOT base not accessible', details: err?.message });
+  }
+
+  // Ensure per-context work root
+  let workRoot;
+  try {
+    workRoot = await ensureWorkRoot({ userId, projectId, workspaceId, sessionId });
+  } catch (err) {
+    return res.status(500).json({ error: 'work root init failed', details: err?.message });
+  }
+
+  const resolvePath = (rel) => resolveWithinRoot(workRoot, rel);
+
+  res.setHeader('Content-Type', 'application/x-ndjson');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const writeLine = (obj) => {
+    try { res.write(JSON.stringify(obj) + '\n'); } catch {}
+  };
+
+  writeLine({ type: 'ready', ts: Date.now(), workRoot });
+
+  // Heartbeat to keep the connection alive
+  const hb = setInterval(() => writeLine({ type: 'ping', ts: Date.now() }), EVENTS_HEARTBEAT_MS);
+
+  let aborted = false;
+  res.on('close', () => { aborted = true; clearInterval(hb); });
+
+  // Process each NDJSON line from the request
+  req.setEncoding('utf8');
+  let buffer = '';
+
+  async function processEventLine(line) {
+    if (!line) return;
+    let evt;
+    try { evt = JSON.parse(line); } catch { return writeLine({ type: 'error', message: 'invalid_json' }); }
+
+    const now = new Date().toISOString();
+    const tool = evt?.tool_call?.function?.name;
+    const args = parseToolArgs(evt?.tool_call?.function?.arguments);
+
+    if (!tool) {
+      return writeLine({ type: 'ignore', reason: 'no_tool', event_id: evt?.id });
+    }
+
+    let result = null;
+    let error = null;
+    try {
+      switch (tool) {
+        case 'UPDATE_FILE':
+          result = await doUpdateFile(args, resolvePath);
+          break;
+        case 'READ_FILE':
+          result = await doReadFile(args, resolvePath);
+          break;
+        case 'RUN_COMMAND':
+          result = await doRunCommand(args, workRoot);
+          break;
+        default:
+          throw new Error(`Unsupported tool: ${tool}`);
+      }
+    } catch (err) {
+      error = { message: err?.message || String(err) };
+    }
+
+    const payload = {
+      event_id: evt.id || undefined,
+      create_time: evt.create_time || undefined,
+      tool: { name: tool },
+      args,
+      result,
+      error,
+      timestamp: now,
+    };
+
+    writeLine(payload);
+  }
+
+  req.on('data', (chunk) => {
+    buffer += chunk;
+    let idx;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 1);
+      // process sequentially to keep ordering
+      processEventLine(line).catch((err) => writeLine({ type: 'error', message: err?.message || String(err) }));
+    }
+  });
+
+  req.on('end', () => {
+    clearInterval(hb);
+    if (!aborted) {
+      writeLine({ type: 'end', ts: Date.now() });
+      try { res.end(); } catch {}
+    }
+  });
 });
 
 app.listen(PORT, () => {

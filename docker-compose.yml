@@ -20,18 +20,75 @@ services:
       - ALLOW_SKIP_AUTH=${ALLOW_SKIP_AUTH}
       - SERVICE_TARGET=dev
       - ENCRYPTION_SECRET_KEY=${ENCRYPTION_SECRET_KEY}
+      # Enable local Docker execution for the producer runner launched by jobs route
+      - PRODUCER_LOCAL_DOCKER=1
+      - PRODUCER_LOCAL_IMAGE=awfl-producer:dev
+      # Ensure the launched containers join this compose network so they can reach js-server by DNS.
+      # If your compose project name differs, update the network name accordingly or set COMPOSE_PROJECT_NAME=awfl-server before running compose.
+      - PRODUCER_LOCAL_DOCKER_ARGS=--network awfl-server_default
+      # Optional tunables for SSE
+      - EVENTS_HEARTBEAT_MS=15000
+      - RECONNECT_BACKOFF_MS=1000
+      # Sidecar consumer (local Docker only): when enabled, each producer run gets a dedicated consumer container.
+      # In production (Cloud Run), calls go to the shared service with OIDC; no SERVICE_AUTH_TOKEN needed here.
+      - PRODUCER_SIDECAR_ENABLE=1
+      - PRODUCER_SIDECAR_CONSUMER_IMAGE=awfl-consumer:dev
+      - PRODUCER_SIDECAR_CONSUMER_PORT=8080
+      # Optional: adjust the consumer work root template for local dev isolation (default uses server-side default)
+      # - PRODUCER_SIDECAR_WORK_PREFIX_TEMPLATE={projectId}/{workspaceId}/{sessionId}
+      # Optional: extra docker args for the sidecar with templating for {userId},{projectId},{workspaceId},{sessionId}
+      # e.g., mount per-session host dir: -v /abs/path/work/{sessionId}:/mnt/work
+      # - PRODUCER_SIDECAR_DOCKER_ARGS=-v /host/work/{sessionId}:/mnt/work
     volumes:
       - ./serviceAccountKey.json:/app/serviceAccountKey.json
       - ./jobs:/app/jobs
       - ./workflows:/app/workflows
       - /app/node_modules
+      # Allow the jobs service to launch sibling containers via Docker Desktop
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - firestore-emulator
+      # - sse-consumer
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:5050/api/health"]
       interval: 5s
       timeout: 2s
       retries: 20
+
+  # sse-consumer:
+  #   build:
+  #     context: ./cloud/sse-consumer
+  #     dockerfile: Dockerfile
+  #   environment:
+  #     - PORT=8080
+  #     # Not strictly required for /sessions/stream, but set for completeness if /sessions/consume is used
+  #     - WORKFLOWS_BASE_URL=http://js-server:5050/api
+  #     - EVENTS_HEARTBEAT_MS=15000
+  #     - RECONNECT_BACKOFF_MS=1000
+  #     # Leave SERVICE_AUTH_TOKEN unset in dev so producer doesn't need auth to call consumer
+  #     # - SERVICE_AUTH_TOKEN=dev-token
+  #   ports:
+  #     - "4000:8080"  # Optional: expose consumer for local inspection
+  #   depends_on:
+  #     - js-server
+  #   restart: unless-stopped
+
+  # Helper service to build the local producer image used by the jobs launcher
+  producer-image:
+    build:
+      context: ./cloud/producer
+    
+      dockerfile: Dockerfile
+    image: awfl-producer:dev
+    # No need to run this service; it's just here so `docker compose build producer-image` tags awfl-producer:dev
+
+  # Helper service to build/tag the local consumer image used by the producer sidecar feature
+  consumer-image:
+    build:
+      context: ./cloud/sse-consumer
+      dockerfile: Dockerfile
+    image: awfl-consumer:dev
+    # No need to run this service; it's just here so `docker compose build consumer-image` tags awfl-consumer:dev
 
   firestore-emulator:
     build:
