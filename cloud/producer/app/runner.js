@@ -181,7 +181,7 @@ async function processEventViaConsumer(evt) {
     validateStatus: () => true,
   });
 
-  // Parse NDJSON response; pick the last payload-like object that has tool
+  // Parse NDJSON response; pick the last object that contains result/error
   return new Promise((resolve, reject) => {
     let lastPayload = null;
     let error = null;
@@ -196,7 +196,7 @@ async function processEventViaConsumer(evt) {
         if (!line) continue;
         try {
           const obj = JSON.parse(line);
-          if (obj && (obj.tool || obj.result || obj.error)) {
+          if (obj && (Object.prototype.hasOwnProperty.call(obj, 'result') || Object.prototype.hasOwnProperty.call(obj, 'error'))) {
             lastPayload = obj;
           }
           if (obj && obj.type === 'error') {
@@ -311,23 +311,22 @@ async function run() {
     let payload = null;
     try {
       payload = await processEventViaConsumer(forwardEvt);
-      console.log("Payload: ", payload)
-    } catch (err) {
-      payload = {
-        event_id: evt.id || undefined,
-        create_time: evt.create_time || undefined,
-        tool: { name: tool },
-        args,
-        result: null,
-        error: { message: err?.message || String(err) },
-        timestamp: new Date().toISOString(),
-      };
+    } catch (_) {
+      // ignore; payload stays null
     }
 
-    // Post callback if requested
+    // Derive tool result only; ignore metadata and errors per policy
+    let toolResult = null;
+    if (payload && typeof payload === 'object' && Object.prototype.hasOwnProperty.call(payload, 'result')) {
+      toolResult = payload.result;
+    } else if (payload !== undefined) {
+      toolResult = payload; // in case consumer already returns raw result
+    }
+
+    // Post callback if requested, passing only the tool result
     if (evt?.callback_id) {
       try {
-        await postCallback(evt.callback_id, payload);
+        await postCallback(evt.callback_id, toolResult);
       } catch (err) {
         console.warn('[producer] callback post failed', err?.message || err);
       }
