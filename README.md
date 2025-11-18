@@ -107,6 +107,34 @@ Frontend integration
 - Set BASE_URL for clients to point to the server, e.g., http://localhost:5050 in development.
 - Web and CLI clients primarily call /api/workflows/* and may also call /jobs/* where needed.
 
+Local Docker: producer sidecar consumer (isolation)
+- When PRODUCER_SIDECAR_ENABLE=1 (default in docker-compose), each POST /jobs/producer/start with localDocker=true will:
+  - Launch a dedicated sse-consumer container named sse-consumer-<id> on the compose network
+  - Override the producer’s CONSUMER_BASE_URL to http://sse-consumer-<id>:8080
+  - Start the producer container pointing at that sidecar
+- Images/ports/env (override via js-server env):
+  - PRODUCER_SIDECAR_CONSUMER_IMAGE (default awfl-consumer:dev)
+  - PRODUCER_SIDECAR_CONSUMER_PORT (default 8080)
+  - PRODUCER_SIDECAR_WORK_PREFIX_TEMPLATE (optional; e.g., {projectId}/{workspaceId}/{sessionId})
+  - PRODUCER_SIDECAR_DOCKER_ARGS (optional; supports {userId},{projectId},{workspaceId},{sessionId} templating; e.g., -v /host/work/{sessionId}:/mnt/work)
+- Networking:
+  - Sidecar runs without published host ports; it is reachable to the producer via Docker DNS (container name) on the compose network.
+  - The shared sse-consumer service in docker-compose remains available at http://localhost:4000 for debugging.
+- Cleanup:
+  - Sidecars are started with --rm and will be removed on stop, but they do not auto-stop when the producer exits yet.
+  - Manual cleanup example: docker ps -q --filter label=awfl.role=sse-consumer-sidecar | xargs -r docker stop
+
+Smoke test
+- Build images (once): docker compose build js-server producer-image consumer-image
+- Start: docker compose up -d
+- Trigger a run:
+  curl -X POST http://localhost:5050/jobs/producer/start \
+    -H 'Content-Type: application/json' \
+    -H 'x-project-id: dev-project' \
+    -H 'x-user-id: local-user' \
+    -d '{"localDocker": true, "workspaceId": "ws1", "sessionId": "sess1"}'
+- Expect two containers: one producer and one sse-consumer-<id>. Producer CONSUMER_BASE_URL should point at the sidecar.
+
 Infrastructure (Terraform)
 - Goal: provision GCP IAM roles and related resources required by the server/workflows.
 - Variables:
@@ -130,7 +158,6 @@ Infrastructure (Terraform)
   - firebase_web_app_auth_domain
   - firebase_web_app_app_id
   - firebase_web_client_config (combined map)
-  - dns_nameservers (nameservers for your Cloud DNS zone)
 - Setup steps:
   - cd infra
   - cp terraform.tfvars.example dev.auto.tfvars

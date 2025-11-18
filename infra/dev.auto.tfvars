@@ -5,6 +5,12 @@ github_repository = "awfl-us/server"
 cloud_run_services_exist = false
 enable_site_verification = false
 
+# Allow LAN dev from Vite served over http://<LAN-IP>:5173
+# Tip: prefer a stable mDNS host (e.g., my-mac.local) when possible to avoid updating this frequently.
+authorized_domains_extra = [
+  "192.168.1.153"
+]
+
 # Optional: Firestore database location (immutable after creation)
 # Multi-region recommended: nam5 (North America) or eur3 (Europe)
 # Regional examples: us-central1, europe-west3
