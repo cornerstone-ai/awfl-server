@@ -2,7 +2,7 @@ FROM --platform=linux/amd64 node:22-slim
 
 WORKDIR /app
 
-# Install system dependencies and Chromium
+# Install system dependencies, Chromium, and docker CLI (for launching local sidecar/producer containers)
 RUN apt-get update && apt-get install -y \
   chromium \
   ca-certificates \
@@ -27,6 +27,7 @@ RUN apt-get update && apt-get install -y \
   xdg-utils \
   wget \
   curl \
+  docker.io \
   --no-install-recommends && \
   rm -rf /var/lib/apt/lists/*
 

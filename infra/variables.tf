@@ -73,3 +73,14 @@ variable "dns_default_ttl" {
   type        = number
   default     = 300
 }
+
+# ------------------------------
+# Firebase Auth / Identity Platform
+# ------------------------------
+# Extra authorized domains (hostnames or IPs) to append to the default list
+# Useful for LAN dev access like 192.168.1.x or mDNS names like my-mac.local
+variable "authorized_domains_extra" {
+  description = "Additional authorized domains for Firebase Auth (e.g., LAN IPs, mDNS hostnames)"
+  type        = list(string)
+  default     = []
+}

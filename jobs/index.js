@@ -15,6 +15,8 @@ import agentsRoutes from '../workflows/agents/index.js'
 import eventsRoutes from '../workflows/events/index.js'
 import { projectIdMiddleware } from '../workflows/projects/util.js';
 import callbacksRoutes from './callbacks/index.js'
+import callbacksProxyRoutes from '../workflows/callbacks/index.js'
+import producerRoutes from './producer/index.js'
 
 const router = express.Router();
 router.use(express.json());
@@ -46,5 +48,9 @@ router.use('/events', eventsRoutes)
 
 // Callbacks creation (project-scoped)
 router.use('/callbacks', callbacksRoutes)
+router.use('/callbacks', callbacksProxyRoutes)
+
+// Producer job trigger (Cloud Run Job)
+router.use('/producer', producerRoutes)
 
 export default router;

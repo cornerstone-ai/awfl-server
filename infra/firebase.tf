@@ -61,14 +61,14 @@ resource "google_identity_platform_config" "default" {
   provider = google-beta
   project  = var.project_id
 
-  authorized_domains = [
+  authorized_domains = concat([
     "localhost",                    # local dev (all ports, e.g., Vite 5173)
     "127.0.0.1",                    # loopback
     var.root_domain,
     "www.${var.root_domain}",
     "${var.project_id}.firebaseapp.com", # default Firebase Hosting domain
     "${var.project_id}.web.app"          # default Firebase Hosting domain
-  ]
+  ], var.authorized_domains_extra)
 
   depends_on = [
     google_project_service.identitytoolkit,

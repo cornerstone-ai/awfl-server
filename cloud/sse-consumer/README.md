@@ -1,141 +1,154 @@
 SSE Consumer Service (Cloud Run)
 
-Purpose
-- Accept an authenticated, long-lived HTTP request that starts a lightweight project/session consumer
-- The consumer connects to the internal workflows events stream and applies side effects on the mounted workspace
-- Mount user-owned storage via Cloud Run Cloud Storage volume (or local bind mount) to persist project data
-- Handle event tool calls (READ_FILE, UPDATE_FILE, RUN_COMMAND) directly in Node, then deliver results via the stored workflow callback
-- Ensure data is synced on shutdown
+Overview
+- Node-only service that executes tool calls (READ_FILE, UPDATE_FILE, RUN_COMMAND) against a sandboxed work directory (WORK_ROOT).
+- Two modes of operation:
+  1) Pull + callbacks (GET /sessions/consume): the consumer connects outbound to the workflows SSE stream and posts results to callbacks.
+  2) Push, stateless streaming (POST /sessions/stream): your backend connects to the consumer, streams NDJSON events in, and receives NDJSON results on the same response. No outbound calls from the consumer.
 
-Key change vs prior design
-- We no longer install or spawn the awfl CLI. Instead, this service embeds a minimal Node-based consumer that:
-  1) Opens an SSE connection to the workflows events stream for a workspace or project
-  2) Parses JSON event payloads
-  3) Executes supported tool calls against the mounted workspace
-  4) Posts results to the internal callbacks endpoint using the provided callback_id
+Key properties
+- Sandboxed storage: all file ops occur under a per-request working directory rooted at WORK_ROOT; path traversal is prevented.
+- Project/workspace scoping: the working directory is derived from WORK_PREFIX_TEMPLATE using request context (project/workspace/user/session).
+- Command safety: RUN_COMMAND executes in the working directory with timeout and output caps.
+- Long-lived connections: heartbeats keep connections open; idle watchdog triggers reconnect (pull mode).
 
 Directory
 - cloud/sse-consumer/
-  - app/server.js: Express app with /sessions/consume endpoint that starts the consumer
-  - package.json: Node 22 runtime
-  - Dockerfile: Minimal Node image; relies on Cloud Run Cloud Storage volume for mounting (no pipx, no awfl)
+  - app/server.js: Express app, tool handlers, SSE client, and endpoints
+  - app/storage.js: storage helpers (safe path resolution, work root creation)
+  - Dockerfile: Node 22 slim
+  - scripts/dev.sh: build and run locally with bind mount at /mnt/work
+  - scripts/sample-curl.sh: sample pull-mode session starter
 
-Runtime behavior
-- Auth: Requires Authorization: Bearer <SERVICE_AUTH_TOKEN> unless SERVICE_AUTH_TOKEN is empty (dev only). In Cloud Run, prefer IAM between trusted services.
-- Endpoint: GET /sessions/consume
-  - query params:
-    - userId (required)
-    - projectId (required)
-    - workspaceId (recommended) — preferred scoping for events stream
-    - sessionId (optional, legacy)
-    - bucket (optional, defaults to env GCS_BUCKET)
-    - prefix (optional subdirectory inside the bucket)
-    - since_id | since_time (optional) — initial replay cursor for events
+Endpoints
 
-- Consumer lifecycle:
-  1) Verify caller auth and user context
-  2) Ensure WORK_ROOT is available (Cloud Run volume mount or local bind mount)
-  3) Connect to workflows/events/stream with the same user/project context
-  4) For each SSE event with a JSON data payload, inspect data.tool_call.function.name and arguments
-  5) Apply side effects in-process:
-     - UPDATE_FILE: write file to mounted workspace
-     - READ_FILE: read file content (UTF-8 with replacement), enforce max bytes
-     - RUN_COMMAND: run shell command in workspace with timeout; capture stdout/stderr; truncate output
-  6) If the event contains callback_id, POST the result payload to /workflows/callbacks/:id
-  7) On client close or SIGTERM, stop the stream and flush any pending work
+1) GET /sessions/consume (pull + callbacks)
+- Starts a consumer that connects to WORKFLOWS_BASE_URL/workflows/events/stream and posts results to /workflows/callbacks/:id.
+- Query params or headers for context:
+  - userId (or header X-User-Id) — required
+  - projectId (or header X-Project-Id) — required
+  - workspaceId (or header X-Workspace-Id) — recommended
+  - sessionId — optional (used for directory scoping if referenced by template)
+  - since_id | since_time — optional replay cursor
+- Behavior:
+  - Parses SSE frames, executes supported tools, and for events with callback_id posts a result payload to callbacks.
+  - Sends "ping" lines to the client to keep the response open.
+  - Reconnects on upstream end/error/idle with exponential backoff; resumes via lastEventId.
+- Auth inbound: SERVICE_AUTH_TOKEN (dev) or Cloud Run IAM (recommended).
+- Auth outbound: ID token for WORKFLOWS_AUDIENCE when posting callbacks; falls back to no Authorization in local dev.
 
-Event format (summary)
-- The consumer expects SSE events where the data field is JSON with the shape used by the workflows service, including optional fields:
-  - callback_id: string — required for sending results
-  - create_time: ISO timestamp — echoed in results
-  - tool_call: {
-      function: { name: "UPDATE_FILE" | "READ_FILE" | "RUN_COMMAND", arguments: string | object }
+2) POST /sessions/stream (push, stateless streaming)
+- Your backend sends NDJSON events in the request body; the consumer writes NDJSON results back on the same connection.
+- Context is set once via headers or query and applies to all events in the stream:
+  - Required: X-User-Id or ?userId=, X-Project-Id or ?projectId=
+  - Optional: X-Workspace-Id or ?workspaceId=, sessionId
+- Content types:
+  - Request: Content-Type: application/x-ndjson (one JSON event per line)
+  - Response: application/x-ndjson (one JSON result per input line, plus heartbeat pings)
+- Behavior:
+  - Executes the tool_call in each input line and writes the result line immediately. No outbound callbacks.
+  - Sends periodic {"type":"ping"} lines to keep the connection alive.
+- Auth inbound: SERVICE_AUTH_TOKEN (dev) or Cloud Run IAM. No outbound auth needed.
+
+Event schema (input)
+- Same shape in both modes; for streaming mode, the event is one JSON object per line:
+  {
+    "id": "evt-1",
+    "create_time": "2025-01-01T00:00:00Z",
+    "callback_id": "cb-1" // optional; ignored in streaming mode
+    "tool_call": {
+      "function": {
+        "name": "UPDATE_FILE" | "READ_FILE" | "RUN_COMMAND",
+        "arguments": { ... } | "{...}" // object or JSON string
+      }
     }
-- Events without tool_call are ignored (no-op)
+  }
 
-Side-effect handlers (Node)
-- UPDATE_FILE
-  - args: { filepath: string, content: string }
-  - Behavior: ensure parent dir, write text to file
-  - Callback payload: { filepath, sessionId, timestamp }
+Result schema (output)
+- For callbacks (pull mode) or direct output line (streaming mode):
+  {
+    "event_id": "evt-1",
+    "create_time": "2025-01-01T00:00:00Z",
+    "tool": { "name": "READ_FILE" },
+    "args": { ... },
+    "result": { ... },
+    "error": { "message": "..." } | null,
+    "timestamp": "2025-...Z"
+  }
 
-- READ_FILE
-  - args: { filepath: string }
-  - Behavior: read file as UTF-8 (with replacement), cap size by READ_FILE_MAX_BYTES
-  - Callback payload: { sessionId, filepath, content, truncated, timestamp }
+Supported tools
+- UPDATE_FILE({ filepath, content })
+  - Ensures parent dir; writes UTF-8 content.
+  - Returns { ok: true, filepath, bytes, mtimeMs }.
+- READ_FILE({ filepath })
+  - Reads UTF-8, capped at READ_FILE_MAX_BYTES; sets truncated=true if capped.
+  - Returns { ok: true, filepath, content, truncated }.
+- RUN_COMMAND({ command })
+  - Executes via bash -lc in the working directory with timeout RUN_COMMAND_TIMEOUT_SECONDS; caps output at OUTPUT_MAX_BYTES.
+  - Returns { ok: true|false, exitCode, stdout, stderr, truncated?, timed_out? }.
 
-- RUN_COMMAND
-  - args: { command: string }
-  - Behavior: sanitize common artifacts, run with timeout (RUN_COMMAND_TIMEOUT_SECONDS), capture stdout/stderr; truncate output to OUTPUT_MAX_BYTES
-  - Callback payload: { sessionId, command, output, error, timed_out?, timestamp }
-
-Internal routing
-- Events stream (reader): GET <WORKFLOWS_BASE_URL>/workflows/events/stream?workspaceId=...&since_id=...
-  - Must present service-to-service identity (Cloud Run IAM) and the same user/project context used by your workflows service
-- Callback delivery (writer): POST <WORKFLOWS_BASE_URL>/workflows/callbacks/:id
-  - Forward minimal headers expected by the callbacks service (it derives auth and project scope from IAM and headers)
-  - Include body with the result payload described above
+Storage and working directory
+- Base mount: WORK_ROOT specifies the base mount path for sandboxed storage (default /mnt/work). For local dev, bind-mount a host folder to this path. In Cloud Run, mount a Cloud Storage bucket or other volume at this path (see below).
+- Per-request work root: The consumer derives a directory under WORK_ROOT using WORK_PREFIX_TEMPLATE rendered with request context.
+  - WORK_PREFIX_TEMPLATE default: {projectId}/{workspaceId}
+  - Supported tokens: {projectId}, {workspaceId}, {sessionId}, {userId}
+  - Example: WORK_PREFIX_TEMPLATE="{projectId}/{workspaceId}/{userId}" with projectId=p-1, workspaceId=w-2, userId=u-9 => /mnt/work/p-1/w-2/u-9
+- Safety: All file paths used by tools must be relative; absolute paths and parent traversal are rejected. Paths are resolved and enforced to stay within the per-request working directory.
 
 Environment variables
-- SERVICE_AUTH_TOKEN: bearer token expected by this service for inbound calls (use IAM in production)
-- WORK_ROOT: mount point inside the container (default: /mnt/work)
-- DISABLE_GCSFUSE: set to 1 when using Cloud Run Cloud Storage volume (recommended)
-- GCS_BUCKET: default bucket if not provided via query (used for documentation/examples only)
-- WORKFLOWS_BASE_URL: base URL for the internal workflows service (e.g., https://workflows-xyz-uc.run.app)
-- WORKFLOWS_AUDIENCE: target audience for ID tokens when calling the workflows service (Cloud Run URL)
-- EVENTS_HEARTBEAT_MS: keepalive for the upstream SSE connection (default: 15000)
-- RECONNECT_BACKOFF_MS: initial backoff between SSE reconnects (default: 1000; exponential with cap)
-- RUN_COMMAND_TIMEOUT_SECONDS: max seconds for shell commands (default: 120)
-- READ_FILE_MAX_BYTES: cap returned read content size (default: 200000)
-- OUTPUT_MAX_BYTES: cap command stdout returned in callbacks (default: 50000)
-
-Authentication and user context
-- Recommended: internal service-to-service calls only
-  - This Cloud Run service is private (no-allow-unauthenticated)
-  - Your trusted backend calls /sessions/consume with IAM or a pre-shared token, and passes userId, projectId, workspaceId
-  - The consumer uses its own service account to call the workflows service (ID token audience = WORKFLOWS_AUDIENCE)
-  - Optionally forward a signed user-context header (e.g., X-User-Context) if your workflows auth layer expects it
-
-Storage mounting
-- Recommended on Cloud Run: mount the Cloud Storage bucket at WORK_ROOT via Cloud Run Cloud Storage volumes; set DISABLE_GCSFUSE=1
-- For local dev, bind mount a host directory to WORK_ROOT
-
-Local dev
-- Build: docker build -t sse-consumer:dev cloud/sse-consumer
-- Run with a host directory as the work root:
-  docker run --rm -it -p 8080:8080 \
-    -e SERVICE_AUTH_TOKEN=devtoken \
-    -e DISABLE_GCSFUSE=1 \
-    -e WORK_ROOT=/mnt/work \
-    -e WORKFLOWS_BASE_URL=http://host.docker.internal:3000 \
-    -e WORKFLOWS_AUDIENCE=http://host.docker.internal:3000 \
-    -v "$(pwd)/_localwork:/mnt/work" \
-    sse-consumer:dev
-
-- Start a consumer session:
-  curl -N -H "Authorization: Bearer devtoken" \
-    "http://localhost:8080/sessions/consume?userId=u1&projectId=p1&workspaceId=w1&since_time=2024-01-01T00:00:00Z"
+- SERVICE_AUTH_TOKEN: inbound bearer token (dev only). If unset, auth is skipped locally; prefer IAM in Cloud Run.
+- WORK_ROOT: directory mount point (default /mnt/work).
+- WORK_PREFIX_TEMPLATE: template for deriving per-request directory (default {projectId}/{workspaceId}).
+- WORKFLOWS_BASE_URL: base URL for workflows service (pull mode only).
+- WORKFLOWS_AUDIENCE: ID token audience for workflows service (pull mode only).
+- EVENTS_HEARTBEAT_MS: keepalive ping interval (default 15000).
+- RECONNECT_BACKOFF_MS: initial reconnect delay for pull mode (default 1000; exponential with cap 30000).
+- RUN_COMMAND_TIMEOUT_SECONDS: command timeout (default 120).
+- READ_FILE_MAX_BYTES: max bytes returned by READ_FILE (default 200000).
+- OUTPUT_MAX_BYTES: max combined stdout/stderr captured by RUN_COMMAND (default 50000).
 
 Cloud Run deployment notes
-- Deploy as a private service; call only from trusted backends
-- Mount the Cloud Storage bucket at /mnt/work using Cloud Run volumes
-  Example gcloud (verify flags for your gcloud version):
-  gcloud run deploy $SERVICE \
-    --image REGION-docker.pkg.dev/PROJECT/app/sse-consumer:TAG \
+- Deploy private; use IAM for inbound auth. Example flags (adjust for your environment):
+  gcloud run deploy sse-consumer \
+    --image gcr.io/$PROJECT_ID/sse-consumer:latest \
+    --region $REGION \
     --no-allow-unauthenticated \
-    --service-account $RUNTIME_SA \
-    --set-env-vars "DISABLE_GCSFUSE=1,WORK_ROOT=/mnt/work,WORKFLOWS_BASE_URL=$WORKFLOWS_URL,WORKFLOWS_AUDIENCE=$WORKFLOWS_URL" \
-    --mount type=cloud-storage,source=$BUCKET,target=/mnt/work
+    --timeout 3600 \
+    --concurrency 1 \
+    --service-account $SERVICE_ACCOUNT_EMAIL \
+    --set-env-vars WORK_ROOT=/mnt/work,WORK_PREFIX_TEMPLATE="{projectId}/{workspaceId}",WORKFLOWS_BASE_URL=$WORKFLOWS_BASE_URL,WORKFLOWS_AUDIENCE=$WORKFLOWS_AUDIENCE
 
-Security
-- Keep this service private and small in scope; it should only:
-  - connect to the internal events stream,
-  - apply file/command side effects within the mounted workspace,
-  - and call the internal callbacks endpoint
-- Avoid passing sensitive data in query strings; prefer signed user-context headers if needed
-- Never store refresh tokens; rely on service-to-service IAM
+- Mount Cloud Storage at /mnt/work if you need persistence (Cloud Run volumes):
+  gcloud run services update sse-consumer \
+    --region $REGION \
+    --add-volume name=work,type=cloud-storage,bucket=$WORK_BUCKET \
+    --add-volume-mount volume=work,mount-path=/mnt/work
 
-Notes
-- See workflows/events/index.js for the SSE stream contract and cursor parameters
-- See workflows/callbacks/index.js for the callback invocation contract
-- The consumer should implement an idle watchdog and exponential backoff reconnect like the Python reference to handle transient errors
+Notes on Cloud Storage mounts
+- The bucket root becomes WORK_ROOT; the per-request work directories are created under that root using the template. For example, if WORK_BUCKET is gs://my-work and template is {projectId}/{workspaceId}, files will be under gs://my-work/p-1/w-2/...
+- Ensure the service account has storage.objectAdmin on the bucket.
+
+Local development
+- Build and run (bind-mount _localwork to /mnt/work):
+  ./cloud/sse-consumer/scripts/dev.sh
+
+- Pull mode example:
+  ./cloud/sse-consumer/scripts/sample-curl.sh
+
+- Streaming mode example:
+  curl -N -sS \
+    -H "Content-Type: application/x-ndjson" \
+    -H "X-User-Id: u-123" \
+    -H "X-Project-Id: p-123" \
+    -H "X-Workspace-Id: w-123" \
+    --data-binary @- \
+    http://localhost:8080/sessions/stream <<'EOF'
+  {"id":"evt-1","tool_call":{"function":{"name":"UPDATE_FILE","arguments":{"filepath":"notes/hello.txt","content":"Hello"}}}}
+  {"id":"evt-2","tool_call":{"function":{"name":"READ_FILE","arguments":{"filepath":"notes/hello.txt"}}}}
+  {"id":"evt-3","tool_call":{"function":{"name":"RUN_COMMAND","arguments":{"command":"ls -la"}}}}
+  EOF
+
+Security notes
+- Keep the service private. Inbound calls from trusted backends only.
+- In streaming mode, there are no outbound requests from the consumer.
+- In pull mode, outbound requests are limited to callbacks to the workflows service using ID tokens.

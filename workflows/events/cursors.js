@@ -31,7 +31,7 @@ router.get('/', async (req, res) => {
 
     if (!projectId) return res.status(400).json({ error: 'projectId or workspaceId required' });
 
-    const colPath = projectScopedCollectionPath(userId, req.projectId, `projects/${projectId}/cursors`);
+    const colPath = projectScopedCollectionPath(userId, req.projectId, `cursors`);
     const projRef = db.doc(`${colPath}/project`);
     const reads = [projRef.get()];
     let sessionRef = null;
@@ -104,7 +104,7 @@ router.post('/', async (req, res) => {
 
     if (targets.includes('session') && !sessionId) return res.status(400).json({ error: 'sessionId required for session-target cursor' });
 
-    const colPath = projectScopedCollectionPath(userId, req.projectId, `projects/${projectId}/cursors`);
+    const colPath = projectScopedCollectionPath(userId, req.projectId, `cursors`);
 
     const toWrite = [];
     if (targets.includes('project')) {

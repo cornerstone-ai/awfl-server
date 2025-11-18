@@ -19,10 +19,19 @@ router.get('/list', async (req, res) => {
     const parent = `projects/${gcpProjectId}/locations/${region}`;
 
     const [response] = await client.listWorkflows({ parent });
+
+    const suffix = process.env.WORKFLOW_ENV || '';
+
     const workflows = (response || []).map((wf) => {
       const fullName = wf.name || '';
       const segments = fullName.split('/');
-      const id = segments[segments.length - 1] || fullName;
+      let id = segments[segments.length - 1] || fullName;
+
+      // Trim the workflow suffix (added back by execute endpoint)
+      if (suffix && id.endsWith(suffix)) {
+        id = id.slice(0, -suffix.length);
+      }
+
       return {
         id,
         fullName,
