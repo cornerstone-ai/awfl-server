@@ -5,13 +5,23 @@ import { parseToolArgs } from '../utils/parse.js';
 import { doReadFile, doRunCommand, doUpdateFile } from '../tools/index.js';
 
 function isCallbackEvent(obj) {
+  // Accept multiple shapes:
+  // - { type: 'callback' | 'tool', ... }
+  // - { tool_call: { function: { name, arguments } }, ... }
   const t = obj?.type || obj?.event || obj?.kind;
-  if (!t) return false;
-  return String(t).toLowerCase() === 'callback' || String(t).toLowerCase() === 'tool';
+  if (t && (String(t).toLowerCase() === 'callback' || String(t).toLowerCase() === 'tool')) return true;
+  if (obj && obj.tool_call && obj.tool_call.function && obj.tool_call.function.name) return true;
+  return false;
 }
 
 function getToolName(obj) {
+  if (obj?.tool_call?.function?.name) return obj.tool_call.function.name;
   return obj?.tool || obj?.name || obj?.callback || obj?.command || obj?.action || obj?.type;
+}
+
+function getToolArgs(obj) {
+  if (obj?.tool_call?.function) return obj.tool_call.function.arguments;
+  return obj?.args ?? obj?.arguments ?? obj?.payload?.args ?? obj?.payload;
 }
 
 export function createHandlers({ workRoot, res }) {
@@ -19,7 +29,7 @@ export function createHandlers({ workRoot, res }) {
 
   async function handleCallback(ev) {
     const tool = String(getToolName(ev) || '').toUpperCase();
-    const argsRaw = ev?.args ?? ev?.arguments ?? ev?.payload?.args ?? ev?.payload;
+    const argsRaw = getToolArgs(ev);
     const args = parseToolArgs(argsRaw);
 
     try {

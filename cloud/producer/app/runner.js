@@ -2,6 +2,9 @@ import axios from 'axios';
 import { createParser } from 'eventsource-parser';
 import { GoogleAuth } from 'google-auth-library';
 import { ensureWorkRoot } from './storage.js';
+import { PassThrough } from 'stream';
+import http from 'http';
+import https from 'https';
 
 // Env config
 const WORKFLOWS_BASE_URL = process.env.WORKFLOWS_BASE_URL || '';
@@ -51,6 +54,8 @@ function consumerHeaders() {
     'Content-Type': 'application/x-ndjson',
     'X-User-Id': X_USER_ID,
     'X-Project-Id': X_PROJECT_ID,
+    // Do not set Content-Length to enable chunked streaming
+    // 'Transfer-Encoding' will be set automatically by Node for streams
   };
   if (X_WORKSPACE_ID) h['X-Workspace-Id'] = X_WORKSPACE_ID;
   if (X_SESSION_ID) h['X-Session-Id'] = X_SESSION_ID;
@@ -78,12 +83,26 @@ async function postCallback(callbackId, payload) {
 
   const maxAttempts = 3;
   let attempt = 0;
+  let useWrapper = false; // on 400, retry with { result: payload }
   while (attempt < maxAttempts) {
     attempt++;
     try {
-      await axios.post(url, payload, { headers, timeout: 20000 });
-      return;
+      const body = useWrapper ? { result: payload } : payload;
+      const resp = await axios.post(url, body, { headers, timeout: 20000, validateStatus: s => s < 500 });
+      if (resp.status >= 200 && resp.status < 300) return;
+      if (resp.status === 400 && !useWrapper) {
+        console.warn('[producer] callback 400; retrying with wrapper { result: ... }');
+        useWrapper = true;
+        continue; // immediate retry without backoff count
+      }
+      throw new Error(`callback_http_${resp.status}`);
     } catch (err) {
+      const status = err?.response?.status;
+      if (status === 400 && !useWrapper) {
+        console.warn('[producer] callback 400; retrying with wrapper { result: ... }');
+        useWrapper = true;
+        continue;
+      }
       const backoff = 300 * attempt + Math.floor(Math.random() * 200);
       await new Promise((r) => setTimeout(r, backoff));
       if (attempt >= maxAttempts) throw err;
@@ -164,59 +183,206 @@ function parseToolArgs(maybe) {
   return { value: maybe };
 }
 
-async function processEventViaConsumer(evt) {
+// Persistent consumer connection (duplex NDJSON)
+function createPersistentConsumerClient() {
   const url = `${CONSUMER_BASE_URL.replace(/\/$/, '')}/sessions/stream`;
-
-  const line = JSON.stringify(evt);
   const headers = consumerHeaders();
 
-  // Use Node http/https via axios request with stream request body
-  // We'll send a single line and end; then read the response lines
-  const resp = await axios.post(url, line + '\n', {
-    headers,
-    responseType: 'stream',
-    timeout: 0,
-    maxContentLength: Infinity,
-    maxBodyLength: Infinity,
-    validateStatus: () => true,
-  });
+  // Keep-alive agents
+  const isHttps = /^https:/i.test(url);
+  const httpAgent = new http.Agent({ keepAlive: true, keepAliveMsecs: 10000, maxSockets: 1 });
+  const httpsAgent = new https.Agent({ keepAlive: true, keepAliveMsecs: 10000, maxSockets: 1 });
 
-  // Parse NDJSON response; pick the last object that contains result/error
-  return new Promise((resolve, reject) => {
-    let lastPayload = null;
-    let error = null;
-    resp.data.setEncoding('utf8');
-    let buf = '';
-    resp.data.on('data', (chunk) => {
-      buf += chunk;
-      let idx;
-      while ((idx = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, idx).trim();
-        buf = buf.slice(idx + 1);
-        if (!line) continue;
-        try {
-          const obj = JSON.parse(line);
-          if (obj && (Object.prototype.hasOwnProperty.call(obj, 'result') || Object.prototype.hasOwnProperty.call(obj, 'error'))) {
-            lastPayload = obj;
-          }
-          if (obj && obj.type === 'error') {
-            error = new Error(obj.message || 'consumer_error');
-          }
-        } catch (_) {
-          // ignore
+  let reqStream = null; // PassThrough for request body
+  let respStream = null; // Incoming response stream
+  let connected = false;
+  let connecting = null;
+
+  // One-in-flight semantics
+  let inflight = null; // { resolve, reject, timeoutId }
+  const queue = []; // [{ line, resolve, reject, timeoutId }]
+
+  function logHeadersSafe(h) {
+    const out = { ...h };
+    if (out.Authorization) out.Authorization = '[redacted]';
+    return out;
+  }
+
+  async function connect() {
+    if (connected) return;
+    if (connecting) return connecting;
+
+    connecting = new Promise(async (resolve, reject) => {
+      try {
+        // Create the PassThrough and write an initial keepalive newline immediately so
+        // proxies/load-balancers don't 408 the request for lack of body data.
+        reqStream = new PassThrough();
+        try { reqStream.write('\n'); } catch {}
+
+        const safeHeaders = logHeadersSafe(headers);
+        console.log('[producer] -> consumer OPEN', { url, headers: safeHeaders });
+        const resp = await axios.post(url, reqStream, {
+          headers,
+          responseType: 'stream',
+          timeout: 0,
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity,
+          validateStatus: () => true,
+          httpAgent,
+          httpsAgent,
+        });
+
+        const sock = resp?.request?.socket;
+        if (sock) {
+          console.log('[producer] consumer connected', {
+            status: resp.status,
+            local: { address: sock.localAddress, port: sock.localPort, family: sock.localFamily },
+            remote: { address: sock.remoteAddress, port: sock.remotePort },
+          });
+        } else {
+          console.log('[producer] consumer response', { status: resp.status });
         }
+
+        respStream = resp.data;
+        respStream.setEncoding('utf8');
+        let buf = '';
+        respStream.on('data', (chunk) => {
+          buf += chunk;
+          let idx;
+          while ((idx = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line) continue;
+            // Ignore non-JSON pings/ready
+            if (line.startsWith('ready') || line.startsWith('ping') || line.startsWith('error ')) {
+              continue;
+            }
+            let obj = null;
+            try { obj = JSON.parse(line); } catch { obj = null; }
+            if (!obj) continue;
+            if (Object.prototype.hasOwnProperty.call(obj, 'result') || Object.prototype.hasOwnProperty.call(obj, 'error')) {
+              // Resolve current inflight
+              const current = inflight;
+              inflight = null;
+              if (current) {
+                clearTimeout(current.timeoutId);
+                if (Object.prototype.hasOwnProperty.call(obj, 'error') && obj.error) current.reject(new Error(obj.error?.message || 'consumer_error'));
+                else current.resolve(obj);
+              }
+              // Immediately try to send next from queue
+              drainQueue();
+            }
+          }
+        });
+        respStream.on('end', () => {
+          console.log('[producer] consumer stream ended');
+          teardownAndRejectPending(new Error('consumer_stream_end'));
+          scheduleReconnect('end');
+        });
+        respStream.on('error', (e) => {
+          console.warn('[producer] consumer stream error', e?.message || e);
+          teardownAndRejectPending(e);
+          scheduleReconnect('error');
+        });
+
+        connected = true;
+        resolve();
+        // After connected, try to drain any queued items
+        drainQueue();
+      } catch (err) {
+        console.warn('[producer] consumer connect failed', err?.message || err);
+        teardownAndRejectPending(err);
+        scheduleReconnect('connect_error');
+        reject(err);
+      } finally {
+        connecting = null;
       }
     });
-    resp.data.on('end', () => {
-      if (error) return reject(error);
-      resolve(lastPayload);
+
+    return connecting;
+  }
+
+  function teardownAndRejectPending(err) {
+    connected = false;
+    try { reqStream?.end(); } catch {}
+    reqStream = null;
+    try { respStream?.destroy(); } catch {}
+    respStream = null;
+
+    // Reject inflight and queued
+    if (inflight) {
+      clearTimeout(inflight.timeoutId);
+      inflight.reject(err);
+      inflight = null;
+    }
+    while (queue.length) {
+      const item = queue.shift();
+      clearTimeout(item.timeoutId);
+      item.reject(err);
+    }
+  }
+
+  let reconnectDelay = RECONNECT_BACKOFF_MS;
+  const reconnectCap = 30000;
+  function scheduleReconnect(reason) {
+    const jitter = Math.floor(Math.random() * 250);
+    const delay = Math.min(reconnectDelay + jitter, reconnectCap);
+    console.log('[producer] reconnecting consumer in', delay, 'ms due to', reason);
+    setTimeout(() => { connect().catch(() => {}); }, delay);
+    reconnectDelay = Math.min(reconnectDelay * 2, reconnectCap);
+  }
+
+  function ensureConnected() {
+    if (connected) return Promise.resolve();
+    return connect();
+  }
+
+  function drainQueue() {
+    if (!connected || inflight) return;
+    const next = queue.shift();
+    if (!next) return;
+    inflight = next;
+    try {
+      reqStream.write(next.line + '\n');
+    } catch (err) {
+      clearTimeout(next.timeoutId);
+      inflight = null;
+      next.reject(err);
+      scheduleReconnect('write_error');
+    }
+  }
+
+  function send(obj, { timeoutMs = 20000 } = {}) {
+    const line = JSON.stringify(obj);
+    return new Promise(async (resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        // If this item is in-flight, clear and force reconnect to unblock
+        if (inflight && inflight.timeoutId === timeoutId) {
+          inflight = null;
+          scheduleReconnect('per-send-timeout');
+        }
+        reject(new Error('consumer_send_timeout'));
+      }, timeoutMs);
+
+      const item = { line, resolve, reject, timeoutId };
+      queue.push(item);
+
+      try {
+        await ensureConnected();
+        drainQueue();
+      } catch (err) {
+        clearTimeout(timeoutId);
+        reject(err);
+      }
     });
-    resp.data.on('error', (e) => reject(e));
-  });
+  }
+
+  return { send };
 }
 
 async function run() {
   console.log('[producer] starting with context', { X_USER_ID, X_PROJECT_ID, X_WORKSPACE_ID, X_SESSION_ID, SINCE_ID, SINCE_TIME, CONSUMER_ID });
+  console.log('[producer] configuration', { CONSUMER_BASE_URL, EVENTS_HEARTBEAT_MS, RECONNECT_BACKOFF_MS });
 
   // Ensure project-scoped work root exists (for mounted storage); non-fatal if it fails
   try {
@@ -244,7 +410,10 @@ async function run() {
   let reconnectDelay = RECONNECT_BACKOFF_MS;
   const reconnectCap = 30000;
 
-  async function connect() {
+  // Create persistent consumer client
+  const consumer = createPersistentConsumerClient();
+
+  async function connectEvents() {
     const params = new URLSearchParams();
     // Always include projectId; optionally narrow by workspace
     params.set('projectId', X_PROJECT_ID);
@@ -295,7 +464,7 @@ async function run() {
       const jitter = Math.floor(Math.random() * 250);
       const delay = Math.min(reconnectDelay + jitter, reconnectCap);
       console.log('[producer] reconnect in', delay, 'ms due to', reason);
-      setTimeout(connect, delay);
+      setTimeout(connectEvents, delay);
       reconnectDelay = Math.min(reconnectDelay * 2, reconnectCap);
     }
   }
@@ -310,7 +479,7 @@ async function run() {
 
     let payload = null;
     try {
-      payload = await processEventViaConsumer(forwardEvt);
+      payload = await consumer.send(forwardEvt, { timeoutMs: Math.max(15000, EVENTS_HEARTBEAT_MS * 2) });
     } catch (_) {
       // ignore; payload stays null
     }
@@ -323,7 +492,7 @@ async function run() {
       toolResult = payload; // in case consumer already returns raw result
     }
 
-    // Post callback if requested, passing only the tool result
+    // Post callback if requested, passing only the tool result (with compatibility fallback)
     if (evt?.callback_id) {
       try {
         await postCallback(evt.callback_id, toolResult);
@@ -337,7 +506,7 @@ async function run() {
     await postCursor({ eventId: evt.id || lastEventId || '', timestamp: cursorTs });
   }
 
-  await connect();
+  await connectEvents();
 }
 
 run().catch((err) => {

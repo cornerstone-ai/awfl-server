@@ -14,7 +14,6 @@ router.post('/', async (req, res) => {
 
     const { remote, name } = req.body || {};
     let { live } = req.body || {};
-    if (!remote || typeof remote !== 'string') return res.status(400).json({ error: 'remote is required' });
 
     const col = projectsCol(userId);
     const docRef = col.doc();
@@ -22,7 +21,7 @@ router.post('/', async (req, res) => {
 
     const data = {
       id: docRef.id,
-      remote: normalizeGitRemote(remote),
+      remote: remote ? normalizeGitRemote(remote) : null,
       ...(has(name) ? { name: String(name).trim() } : {}),
       live: asBool(live, false),
       created: now,
