@@ -37,6 +37,10 @@ export const SYNC_ON_START = ['1','true','yes'].includes(String(process.env.SYNC
 // Interval in ms to re-run GCS sync while the stream is open
 export const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS || 15000);
 
+// Optional requester-pays billing project to charge for GCS requests
+// If set, we will include both the x-goog-user-project header and userProject query param where applicable
+export const GCS_BILLING_PROJECT = process.env.GCS_BILLING_PROJECT || process.env.BILLING_PROJECT || '';
+
 // Stream heartbeat interval back to the producer
 export const EVENTS_HEARTBEAT_MS = Number(process.env.EVENTS_HEARTBEAT_MS || 15000);
 

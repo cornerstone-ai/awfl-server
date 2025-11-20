@@ -1,0 +1,15 @@
+{
+  "name": "gcs-harness",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Local harness to test GCS DownscopedClient CAB tokens against a bucket/prefix.",
+  "license": "UNLICENSED",
+  "engines": { "node": ">=18" },
+  "type": "commonjs",
+  "dependencies": {
+    "google-auth-library": "^9.14.2"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}

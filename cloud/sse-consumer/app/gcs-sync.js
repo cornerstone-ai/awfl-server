@@ -3,7 +3,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import axios from 'axios';
 import { GoogleAuth, OAuth2Client } from 'google-auth-library';
-import { GCS_API_BASE, GCS_DOWNLOAD_CONCURRENCY, GCS_UPLOAD_CONCURRENCY, GCS_ENABLE_UPLOAD } from './config.js';
+import { GCS_API_BASE, GCS_DOWNLOAD_CONCURRENCY, GCS_UPLOAD_CONCURRENCY, GCS_ENABLE_UPLOAD, GCS_BILLING_PROJECT } from './config.js';
 import { resolveWithin } from './storage.js';
 
 const GCS_DEBUG = /^1|true|yes$/i.test(String(process.env.GCS_DEBUG || ''));
@@ -40,6 +40,16 @@ async function getAuthHeader(providedToken) {
   }
 }
 
+function withRequesterPays({ headers = {}, params = {} } = {}) {
+  const out = { headers: { ...headers }, params: { ...params } };
+  if (GCS_BILLING_PROJECT) {
+    out.headers['x-goog-user-project'] = GCS_BILLING_PROJECT;
+    // For APIs that support it (objects list/get/upload), include userProject query param
+    out.params.userProject = GCS_BILLING_PROJECT;
+  }
+  return out;
+}
+
 async function readManifest(manifestPath) {
   try {
     const raw = await fsp.readFile(manifestPath, 'utf8');
@@ -67,9 +77,10 @@ async function debugTestPermissions({ bucket, permissions, headers }) {
     const url = `${baseUrl}?${qs}`;
 
     const preview = String(headers?.Authorization || '').replace(/^Bearer\s+/, '').slice(0, 8);
+    const extra = withRequesterPays({ headers });
     dlog('testPermissions request', { url, hasAuth: Boolean(headers?.Authorization), tokenPreview: preview ? `${preview}…` : '' });
 
-    const resp = await http.get(url, { headers });
+    const resp = await http.get(url, { headers: extra.headers });
     if (resp.status === 200) {
       dlog('testPermissions response', { permissions: resp?.data?.permissions || [], status: resp.status });
     } else {
@@ -78,7 +89,7 @@ async function debugTestPermissions({ bucket, permissions, headers }) {
         status: resp.status,
         respHeaders: resp?.headers,
         respData: resp?.data,
-        reqHeaders: redactAuth(headers),
+        reqHeaders: redactAuth(extra.headers),
         bucket,
       });
     }
@@ -94,18 +105,14 @@ async function listAllObjects({ bucket, prefix, headers }) {
   const baseUrl = `${GCS_API_BASE.replace(/\/$/, '')}/storage/v1/b/${encodeURIComponent(bucket)}/o`;
 
   while (true) {
-    const params = {
-      prefix,
-      pageToken,
-      fields: 'items(name,etag,generation,updated,md5Hash,size),nextPageToken',
-    };
+    const merged = withRequesterPays({ headers, params: { prefix, pageToken, fields: 'items(name,etag,generation,updated,md5Hash,size),nextPageToken' } });
 
     if (GCS_DEBUG) {
-      const preview = String(headers?.Authorization || '').replace(/^Bearer\s+/, '').slice(0, 8);
-      dlog('list page', { baseUrl, hasAuth: Boolean(headers?.Authorization), tokenPreview: preview ? `${preview}…` : '', bucket, prefix, pageToken });
+      const preview = String(merged.headers?.Authorization || '').replace(/^Bearer\s+/, '').slice(0, 8);
+      dlog('list page', { baseUrl, hasAuth: Boolean(merged.headers?.Authorization), tokenPreview: preview ? `${preview}…` : '', bucket, prefix, pageToken });
     }
 
-    const resp = await http.get(baseUrl, { params, headers });
+    const resp = await http.get(baseUrl, { params: merged.params, headers: merged.headers });
 
     if (resp.status === 404) {
       // Treat non-existent bucket/prefix as empty on initial sync to avoid hard failure
@@ -113,15 +120,30 @@ async function listAllObjects({ bucket, prefix, headers }) {
       return items;
     }
     if (resp.status !== 200) {
+      const message = resp?.data?.error?.message;
+      const reasons = Array.isArray(resp?.data?.error?.errors) ? resp.data.error.errors.map(e => e?.reason).filter(Boolean) : undefined;
+
+      // Always emit a concise error summary including JSON body fields if present
+      // eslint-disable-next-line no-console
+      console.warn('[consumer][gcs] list error summary', {
+        status: resp.status,
+        message,
+        reasons,
+        bucket,
+        prefix,
+        billingProjectUsed: Boolean(GCS_BILLING_PROJECT),
+        userProject: GCS_BILLING_PROJECT || undefined,
+      });
+
       if (GCS_DEBUG) {
         // eslint-disable-next-line no-console
         console.warn('[consumer][gcs] list error', {
           url: baseUrl,
-          params,
+          params: merged.params,
           status: resp.status,
           respHeaders: resp?.headers,
           respData: resp?.data,
-          reqHeaders: redactAuth(headers),
+          reqHeaders: redactAuth(merged.headers),
           bucket,
           prefix,
         });
@@ -131,12 +153,15 @@ async function listAllObjects({ bucket, prefix, headers }) {
         bucket,
         prefix,
         status: resp.status,
+        message,
+        reasons,
+        billingProjectUsed: Boolean(GCS_BILLING_PROJECT),
         response: { headers: resp?.headers, data: resp?.data },
       };
       // If a downscoped token was provided and we hit 403 on list, hint about bucket-level list permission
-      if (resp.status === 403 && headers?.Authorization && GCS_DEBUG) {
+      if (resp.status === 403 && merged.headers?.Authorization && GCS_DEBUG) {
         // eslint-disable-next-line no-console
-        console.warn('[consumer][gcs] hint', '403 with provided token. Ensure the source SA used to mint the token has storage.objects.list on the bucket, and CAB/IAM conditions allow list at the bucket resource.');
+        console.warn('[consumer][gcs] hint', '403 with provided token. Ensure the source SA used to mint the token has storage.objects.list on the bucket, check requester-pays billing (userProject), and confirm CAB condition prefix matches the request prefix.');
       }
       throw err;
     }
@@ -152,9 +177,10 @@ async function listAllObjects({ bucket, prefix, headers }) {
 
 async function downloadObject({ bucket, objectName, destPath, headers }) {
   const url = `${GCS_API_BASE.replace(/\/$/, '')}/download/storage/v1/b/${encodeURIComponent(bucket)}/o/${encodeURIComponent(objectName)}`;
+  const merged = withRequesterPays({ headers, params: { alt: 'media' } });
   const resp = await http.get(url, {
-    params: { alt: 'media' },
-    headers,
+    params: merged.params,
+    headers: merged.headers,
     responseType: 'arraybuffer',
     timeout: 120000,
     maxContentLength: Infinity,
@@ -173,12 +199,16 @@ async function downloadObject({ bucket, objectName, destPath, headers }) {
         respHeaders: resp?.headers,
         // do not log body for potential large binary; include type/size instead
         respBodyInfo: resp?.data ? { type: typeof resp.data, length: (resp.data?.length || 0) } : null,
-        reqHeaders: redactAuth(headers),
+        reqHeaders: redactAuth(merged.headers),
         bucket,
         objectName,
       });
     }
-    throw new Error(`gcs_download_http_${resp.status}`);
+    const message = resp?.data?.error?.message;
+    const reasons = Array.isArray(resp?.data?.error?.errors) ? resp.data.error.errors.map(e => e?.reason).filter(Boolean) : undefined;
+    const err = new Error(`gcs_download_http_${resp.status}`);
+    err.details = { status: resp.status, message, reasons, billingProjectUsed: Boolean(GCS_BILLING_PROJECT), response: resp?.data };
+    throw err;
   }
   await fsp.mkdir(path.dirname(destPath), { recursive: true });
   await fsp.writeFile(destPath, resp.data);
@@ -222,28 +252,30 @@ function guessContentType(filePath) {
 
 async function uploadObject({ bucket, objectName, filePath, headers, ifGenerationMatch }) {
   const url = `${GCS_API_BASE.replace(/\/$/, '')}/upload/storage/v1/b/${encodeURIComponent(bucket)}/o`;
-  const params = { uploadType: 'media', name: objectName };
-  if (ifGenerationMatch !== undefined && ifGenerationMatch !== null) params.ifGenerationMatch = String(ifGenerationMatch);
+  const merged = withRequesterPays({ headers, params: { uploadType: 'media', name: objectName } });
+  if (ifGenerationMatch !== undefined && ifGenerationMatch !== null) merged.params.ifGenerationMatch = String(ifGenerationMatch);
   const contentType = guessContentType(filePath);
   const data = await fsp.readFile(filePath);
 
-  const resp = await http.post(url, data, { params, headers: { ...headers, 'Content-Type': contentType } });
+  const resp = await http.post(url, data, { params: merged.params, headers: { ...merged.headers, 'Content-Type': contentType } });
   if (resp.status !== 200) {
     if (GCS_DEBUG) {
       // eslint-disable-next-line no-console
       console.warn('[consumer][gcs] upload error', {
         url,
-        params,
+        params: merged.params,
         status: resp.status,
         respHeaders: resp?.headers,
         respData: resp?.data,
-        reqHeaders: redactAuth(headers),
+        reqHeaders: redactAuth(merged.headers),
         bucket,
         objectName,
       });
     }
+    const message = resp?.data?.error?.message;
+    const reasons = Array.isArray(resp?.data?.error?.errors) ? resp.data.error.errors.map(e => e?.reason).filter(Boolean) : undefined;
     const err = new Error(`gcs_upload_http_${resp.status}`);
-    err.details = { status: resp.status, response: resp?.data };
+    err.details = { status: resp.status, message, reasons, billingProjectUsed: Boolean(GCS_BILLING_PROJECT), response: resp?.data };
     throw err;
   }
   return resp.data; // object resource with generation, etc.

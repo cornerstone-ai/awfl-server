@@ -1,26 +1,58 @@
 import express from 'express';
 import { db, userScopedCollectionPath } from './common.js';
-import { readFileSync } from 'fs';
+import fs from 'node:fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const router = express.Router();
 
-// Resolve default agent input schema from workflows/types/agent_input.json (ESM-safe)
+// ESM-safe __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const defaultSchemaPath = path.resolve(__dirname, '../types/agent_input.json');
-let defaultAgentInputSchema = undefined;
-function loadDefaultAgentInputSchema() {
-  if (defaultAgentInputSchema !== undefined) return defaultAgentInputSchema;
+
+// Load file-defined agents from workflows/agents/defs/*.json
+async function loadFileDefinedAgents() {
   try {
-    const raw = readFileSync(defaultSchemaPath, 'utf-8');
-    defaultAgentInputSchema = JSON.parse(raw);
-  } catch (err) {
-    console.error('[agents] failed to load default agent input schema', { defaultSchemaPath, err });
-    defaultAgentInputSchema = null;
+    const defsDir = path.resolve(__dirname, './defs');
+    const entries = await fs.readdir(defsDir, { withFileTypes: true });
+    const files = entries.filter(e => e.isFile() && e.name.endsWith('.json'));
+    const out = [];
+    for (const f of files) {
+      try {
+        const full = path.join(defsDir, f.name);
+        const raw = await fs.readFile(full, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') continue;
+        const name = typeof parsed.name === 'string' ? parsed.name.trim() : null;
+        const providedId = typeof parsed.id === 'string' ? parsed.id.trim() : null;
+        const id = providedId || (name ? name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') : null);
+        if (!id || !name) continue;
+        const description = typeof parsed.description === 'string' ? parsed.description : null;
+        const workflowName = typeof parsed.workflowName === 'string' ? parsed.workflowName.trim() : null;
+        const tools = Array.isArray(parsed.tools) ? parsed.tools.filter(t => typeof t === 'string') : undefined;
+        const inputSchema = parsed.inputSchema && typeof parsed.inputSchema === 'object' ? parsed.inputSchema : undefined;
+        out.push({ id, name, description, workflowName, tools, inputSchema, source: 'file' });
+      } catch (_) {
+        // skip malformed
+      }
+    }
+    return out;
+  } catch (_) {
+    return [];
   }
-  return defaultAgentInputSchema;
+}
+
+function dedupeById(preferred = [], fallbacks = []) {
+  const map = new Map();
+  for (const a of preferred) {
+    if (!a?.id) continue;
+    map.set(a.id, a);
+  }
+  for (const a of fallbacks) {
+    if (!a?.id) continue;
+    if (!map.has(a.id)) map.set(a.id, a);
+  }
+  return Array.from(map.values());
 }
 
 // Create an agent
@@ -46,10 +78,7 @@ router.post('/', async (req, res) => {
       updated: now,
     };
 
-    // Only set tools if provided; otherwise leave undefined so list endpoint can return defaults
     if (Array.isArray(tools) && tools.length) data.tools = tools;
-
-    // Optional: attach explicit inputSchema if provided
     if (inputSchema && typeof inputSchema === 'object') data.inputSchema = inputSchema;
 
     await docRef.set(data, { merge: true });
@@ -60,7 +89,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-// List agents (optionally limit/order)
+// List agents (optionally limit/order) - includes file-defined agents from workflows/agents/defs
 router.get('/', async (req, res) => {
   try {
     const userId = req.userId;
@@ -72,12 +101,11 @@ router.get('/', async (req, res) => {
       .limit(Math.min(Number(limit) || 50, 200));
 
     const snap = await q.get();
-    const baseSchema = loadDefaultAgentInputSchema();
-    const agents = snap.docs.map((d) => {
-      const a = d.data();
-      if (a && a.inputSchema) return a;
-      return baseSchema ? { ...a, inputSchema: baseSchema } : a;
-    });
+    const dbAgents = snap.docs.map((d) => d.data());
+
+    const fileAgents = await loadFileDefinedAgents();
+    const agents = dedupeById(dbAgents, fileAgents);
+
     return res.status(200).json({ agents });
   } catch (err) {
     console.error('[agents] list failed', err);
@@ -85,18 +113,24 @@ router.get('/', async (req, res) => {
   }
 });
 
-// Get a single agent
+// Get a single agent - supports file-defined agents by id
 router.get('/:id', async (req, res) => {
   try {
     const userId = req.userId;
     const { id } = req.params;
     const docRef = db.doc(userScopedCollectionPath(userId, `agents/${id}`));
     const snap = await docRef.get();
-    if (!snap.exists) return res.status(404).json({ error: 'Agent not found' });
-    const agent = snap.data();
-    const baseSchema = loadDefaultAgentInputSchema();
-    const enriched = agent && agent.inputSchema ? agent : (baseSchema ? { ...agent, inputSchema: baseSchema } : agent);
-    return res.status(200).json({ agent: enriched });
+    if (snap.exists) {
+      const agent = snap.data();
+      return res.status(200).json({ agent });
+    }
+
+    // Fallback: file-defined
+    const fileAgents = await loadFileDefinedAgents();
+    const found = fileAgents.find(a => a.id === id);
+    if (found) return res.status(200).json({ agent: found });
+
+    return res.status(404).json({ error: 'Agent not found' });
   } catch (err) {
     console.error('[agents] get failed', err);
     return res.status(500).json({ error: 'Failed to get agent' });
@@ -124,12 +158,7 @@ router.patch('/:id', async (req, res) => {
 
     await docRef.set(updates, { merge: true });
     const after = await docRef.get();
-
-    const baseSchema = loadDefaultAgentInputSchema();
-    const agent = after.data();
-    const enriched = agent && agent.inputSchema ? agent : (baseSchema ? { ...agent, inputSchema: baseSchema } : agent);
-
-    return res.status(200).json({ agent: enriched });
+    return res.status(200).json({ agent: after.data() });
   } catch (err) {
     console.error('[agents] update failed', err);
     return res.status(500).json({ error: 'Failed to update agent' });
