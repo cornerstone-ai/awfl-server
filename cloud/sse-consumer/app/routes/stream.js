@@ -3,6 +3,7 @@ import { ensureWorkRoot } from '../storage.js';
 import { createHandlers } from '../sse/consumer.js';
 import { EVENTS_HEARTBEAT_MS, SYNC_ON_START, GCS_BUCKET, GCS_PREFIX_TEMPLATE, SYNC_INTERVAL_MS } from '../config.js';
 import { syncBucketPrefix } from '../gcs-sync.js';
+import { registerSession, unregisterSession, makeSessionKey } from '../sessions.js';
 
 const GCS_DEBUG = /^1|true|yes$/i.test(String(process.env.GCS_DEBUG || ''));
 
@@ -108,6 +109,10 @@ export function registerStreamRoute(app) {
       }
     }
 
+    // Register a process-level flush hook so a hard shutdown still attempts one final sync
+    const sessionKey = makeSessionKey({ userId, projectId, workspaceId, sessionId });
+    registerSession(sessionKey, async () => { await runSync('shutdown', { suppressWrite: true }); });
+
     // Optionally trigger initial sync on connect
     if (SYNC_ON_START && gcsBucket) {
       // fire and wait for first sync
@@ -168,6 +173,7 @@ export function registerStreamRoute(app) {
       if (gcsBucket) {
         try { runSync('shutdown', { suppressWrite: true }); } catch {}
       }
+      try { unregisterSession(sessionKey); } catch {}
       // eslint-disable-next-line no-console
       console.log('[consumer] closing stream', { reason, linesCount });
       try { res.end(); } catch {}

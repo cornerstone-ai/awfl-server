@@ -51,3 +51,6 @@ export const RUN_COMMAND_TIMEOUT_SECONDS = Number(process.env.RUN_COMMAND_TIMEOU
 
 // Server
 export const PORT = Number(process.env.PORT || 8080);
+
+// Shutdown behavior
+export const SHUTDOWN_SYNC_TIMEOUT_MS = Number(process.env.SHUTDOWN_SYNC_TIMEOUT_MS || 4000);
