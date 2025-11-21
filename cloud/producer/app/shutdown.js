@@ -2,6 +2,32 @@ import axios from 'axios';
 import { getWorkflowsIdTokenHeaders } from './auth.js';
 import { contextHeaders, SHUTDOWN_TIMEOUT_MS, WORKFLOWS_BASE_URL, X_PROJECT_ID, CONSUMER_ID } from './config.js';
 
+// Simple shutdown hook registry so subsystems can cleanly teardown before we release the lock
+const shutdownHooks = new Set();
+let shuttingDown = false;
+
+export function registerShutdownHook(fn) {
+  if (typeof fn === 'function') shutdownHooks.add(fn);
+  return () => shutdownHooks.delete(fn);
+}
+
+async function runShutdownHooks() {
+  const perHookTimeout = Math.max(500, Math.floor(SHUTDOWN_TIMEOUT_MS / 2));
+  const hooks = Array.from(shutdownHooks);
+  if (!hooks.length) return;
+  console.log('[producer] running shutdown hooks', { count: hooks.length, timeoutPerHookMs: perHookTimeout });
+  await Promise.allSettled(
+    hooks.map((fn) =>
+      Promise.race([
+        Promise.resolve().then(() => fn()).catch((err) => {
+          console.warn('[producer] shutdown hook failed', err?.message || err);
+        }),
+        new Promise((resolve) => setTimeout(resolve, perHookTimeout)),
+      ]),
+    ),
+  );
+}
+
 // Release project lock on shutdown
 export async function releaseProjectLock(reason = 'shutdown') {
   try {
@@ -35,15 +61,22 @@ export async function releaseProjectLock(reason = 'shutdown') {
   return false;
 }
 
-let shuttingDown = false;
 export async function gracefulShutdown(code = 0, signal = 'signal') {
   if (shuttingDown) return; // idempotent
   shuttingDown = true;
   try {
     console.log('[producer] shutting down', { code, signal });
+
+    // 1) Give subsystems a chance to cleanup and stop reconnects, etc.
+    await Promise.race([
+      runShutdownHooks(),
+      new Promise((resolve) => setTimeout(resolve, Math.max(500, Math.floor(SHUTDOWN_TIMEOUT_MS / 2)))),
+    ]);
+
+    // 2) Then attempt to release the lock
     await Promise.race([
       releaseProjectLock(`process_${signal}`),
-      new Promise((resolve) => setTimeout(resolve, SHUTDOWN_TIMEOUT_MS)),
+      new Promise((resolve) => setTimeout(resolve, Math.max(500, Math.floor(SHUTDOWN_TIMEOUT_MS / 2)))),
     ]);
   } catch (_) {
     // ignore

@@ -19,6 +19,7 @@ import {
   CONSUMER_ID,
   EVENTS_HEARTBEAT_MS,
   RECONNECT_BACKOFF_MS,
+  IDLE_SHUTDOWN_MS,
   consumerHeaders,
   contextHeaders,
 } from './config.js';
@@ -27,7 +28,8 @@ import { getWorkflowsIdTokenHeaders } from './auth.js';
 import { postCallback } from './callbacks.js';
 import { getProjectCursor, postCursor } from './cursors.js';
 import { createPersistentConsumerClient } from './consumer.js';
-import { gracefulShutdown } from './shutdown.js';
+import { gracefulShutdown, registerShutdownHook } from './shutdown.js';
+import { startProjectLockClient } from './lock.js';
 
 if (!WORKFLOWS_BASE_URL) {
   console.error('[producer] WORKFLOWS_BASE_URL is required');
@@ -53,7 +55,7 @@ function parseToolArgs(maybe) {
 
 async function run() {
   console.log('[producer] starting with context', { X_USER_ID, X_PROJECT_ID, X_WORKSPACE_ID, X_SESSION_ID, SINCE_ID, SINCE_TIME, CONSUMER_ID });
-  console.log('[producer] configuration', { CONSUMER_BASE_URL: process.env.CONSUMER_BASE_URL, EVENTS_HEARTBEAT_MS, RECONNECT_BACKOFF_MS });
+  console.log('[producer] configuration', { CONSUMER_BASE_URL: process.env.CONSUMER_BASE_URL, EVENTS_HEARTBEAT_MS, RECONNECT_BACKOFF_MS, IDLE_SHUTDOWN_MS });
 
   // Ensure project-scoped work root exists (for mounted storage); non-fatal if it fails
   try {
@@ -99,7 +101,28 @@ async function run() {
   // Create persistent consumer client
   const headers = consumerHeaders({ gcsToken: gcsTokenToUse });
   const consumer = createPersistentConsumerClient(headers);
+  registerShutdownHook(() => consumer.close());
 
+  // Start consumer lock client (acquire + refresh loop)
+  const lockClient = startProjectLockClient({ onConflict: () => gracefulShutdown(0, 'lock_conflict') });
+  registerShutdownHook(() => lockClient.stop());
+
+  // Idle shutdown timer
+  let idleTimer = null;
+  function resetIdleTimer(reason = 'event') {
+    try { if (idleTimer) clearTimeout(idleTimer); } catch {}
+    if (!Number.isFinite(IDLE_SHUTDOWN_MS) || IDLE_SHUTDOWN_MS <= 0) return;
+    idleTimer = setTimeout(() => {
+      console.log('[producer] idle timeout reached, shutting down', { idleMs: IDLE_SHUTDOWN_MS });
+      gracefulShutdown(0, 'idle_timeout');
+    }, IDLE_SHUTDOWN_MS);
+    console.log('[producer] idle timer reset', { reason, idleMs: IDLE_SHUTDOWN_MS });
+  }
+  registerShutdownHook(() => { try { if (idleTimer) clearTimeout(idleTimer); } catch {}; idleTimer = null; });
+  resetIdleTimer('start');
+
+  // Event stream connection
+  let eventsAbortController = null;
   async function connectEvents() {
     const params = new URLSearchParams();
     // Always include projectId; optionally narrow by workspace
@@ -124,12 +147,14 @@ async function run() {
         const toolName = data?.tool_call?.function?.name;
         const evMeta = { id: data?.id || event.id, tool: toolName, create_time: data?.create_time || data?.time, workspaceId: X_WORKSPACE_ID };
         console.log('[producer] event received', evMeta);
+        resetIdleTimer('event');
         handleEvent(data).catch((err) => {
           console.warn('[producer] handleEvent error', err?.message || err);
         });
       }
     });
 
+    eventsAbortController = new AbortController();
     try {
       const response = await axios.get(url, {
         headers: {
@@ -139,6 +164,7 @@ async function run() {
         },
         responseType: 'stream',
         timeout: 0,
+        signal: eventsAbortController.signal,
       });
 
       response.data.on('data', (chunk) => parser.feed(chunk.toString()));
@@ -156,6 +182,7 @@ async function run() {
       reconnectDelay = Math.min(reconnectDelay * 2, reconnectCap);
     }
   }
+  registerShutdownHook(() => { try { eventsAbortController?.abort(); } catch {}; eventsAbortController = null; });
 
   async function handleEvent(evt) {
     const tool = evt?.tool_call?.function?.name;

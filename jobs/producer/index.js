@@ -117,7 +117,9 @@ router.post('/start', async (req, res) => {
       // Useful context for logs
       { name: 'CONSUMER_ID', value: consumerId },
       { name: 'GCS_BUCKET', value: process.env.GCS_BUCKET },
-      { name: 'GCS_DEBUG', value: '1' }
+      { name: 'GCS_DEBUG', value: '1' },
+      // Ensure runner uses the same lock lease the server acquired
+      { name: 'LOCK_LEASE_MS', value: String(leaseMs) },
     ];
 
     let sidecarInfo = null;

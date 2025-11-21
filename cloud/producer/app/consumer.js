@@ -19,6 +19,8 @@ export function createPersistentConsumerClient(headers) {
   let respStream = null; // Incoming response stream
   let connected = false;
   let connecting = null;
+  let stopped = false;
+  let reconnectTimer = null;
 
   // One-in-flight semantics
   let inflight = null; // { resolve, reject, timeoutId }
@@ -32,6 +34,7 @@ export function createPersistentConsumerClient(headers) {
   }
 
   async function connect() {
+    if (stopped) return;
     if (connected) return;
     if (connecting) return connecting;
 
@@ -148,14 +151,17 @@ export function createPersistentConsumerClient(headers) {
   let reconnectDelay = RECONNECT_BACKOFF_MS;
   const reconnectCap = 30000;
   function scheduleReconnect(reason) {
+    if (stopped) return;
     const jitter = Math.floor(Math.random() * 250);
     const delay = Math.min(reconnectDelay + jitter, reconnectCap);
     console.log('[producer] reconnecting consumer in', delay, 'ms due to', reason);
-    setTimeout(() => { connect().catch(() => {}); }, delay);
+    if (reconnectTimer) { try { clearTimeout(reconnectTimer); } catch {} }
+    reconnectTimer = setTimeout(() => { connect().catch(() => {}); }, delay);
     reconnectDelay = Math.min(reconnectDelay * 2, reconnectCap);
   }
 
   function ensureConnected() {
+    if (stopped) return Promise.reject(new Error('consumer_stopped'));
     if (connected) return Promise.resolve();
     return connect();
   }
@@ -176,6 +182,7 @@ export function createPersistentConsumerClient(headers) {
   }
 
   function send(obj, { timeoutMs = 20000 } = {}) {
+    if (stopped) return Promise.reject(new Error('consumer_stopped'));
     const line = JSON.stringify(obj);
     return new Promise(async (resolve, reject) => {
       const timeoutId = setTimeout(() => {
@@ -200,5 +207,12 @@ export function createPersistentConsumerClient(headers) {
     });
   }
 
-  return { send };
+  function close() {
+    stopped = true;
+    try { if (reconnectTimer) clearTimeout(reconnectTimer); } catch {}
+    reconnectTimer = null;
+    teardownAndRejectPending(new Error('consumer_closed'));
+  }
+
+  return { send, close };
 }

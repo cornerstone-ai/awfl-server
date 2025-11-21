@@ -12,6 +12,10 @@ export const GCS_PREFIX_TEMPLATE = process.env.GCS_PREFIX_TEMPLATE || '{userId}/
 export const GCS_DEBUG = /^1|true|yes$/i.test(String(process.env.GCS_DEBUG || ''));
 export const SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS || 4000);
 
+// Lock/idle tuning
+export const LOCK_LEASE_MS = Number(process.env.LOCK_LEASE_MS || process.env.X_LOCK_LEASE_MS || 10 * 60 * 1000);
+export const IDLE_SHUTDOWN_MS = Number(process.env.IDLE_SHUTDOWN_MS || 5 * 60 * 1000);
+
 // Context
 export const X_USER_ID = process.env.X_USER_ID || process.env.USER_ID || '';
 export const X_PROJECT_ID = process.env.X_PROJECT_ID || process.env.PROJECT_ID || '';
