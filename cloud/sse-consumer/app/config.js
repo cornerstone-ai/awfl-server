@@ -31,7 +31,7 @@ export const GCS_ENABLE_UPLOAD = ['1','true','yes'].includes(String(process.env.
 export const GCS_BUCKET = process.env.GCS_BUCKET || '';
 // Prefix template for objects within the bucket to mirror into the work root
 // Supports {userId},{projectId},{workspaceId},{sessionId}
-export const GCS_PREFIX_TEMPLATE = process.env.GCS_PREFIX_TEMPLATE || '{userId}/{projectId}/{workspaceId}/{sessionId}/';
+export const GCS_PREFIX_TEMPLATE = process.env.GCS_PREFIX_TEMPLATE || '{userId}/{projectId}/{sessionId}/';
 // Trigger an initial sync automatically when /sessions/stream is established
 // Default enabled to ensure the local workspace is hydrated promptly.
 export const SYNC_ON_START = ['1','true','yes'].includes(String(process.env.SYNC_ON_START || '1').toLowerCase());
