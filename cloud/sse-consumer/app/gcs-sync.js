@@ -6,8 +6,10 @@ import { GoogleAuth, OAuth2Client } from 'google-auth-library';
 import { GCS_API_BASE, GCS_DOWNLOAD_CONCURRENCY, GCS_UPLOAD_CONCURRENCY, GCS_ENABLE_UPLOAD, GCS_BILLING_PROJECT } from './config.js';
 import { resolveWithin } from './storage.js';
 
+// Fine-grained control: TRACE enables very verbose per-request logging; DEBUG enables concise error/context logs
+const GCS_TRACE = /^1|true|yes$/i.test(String(process.env.GCS_TRACE || ''));
 const GCS_DEBUG = /^1|true|yes$/i.test(String(process.env.GCS_DEBUG || ''));
-function dlog(...args) { if (GCS_DEBUG) console.log('[consumer][gcs]', ...args); }
+function dtrace(...args) { if (GCS_TRACE) console.log('[consumer][gcs]', ...args); }
 
 // Use a dedicated Axios instance to avoid any global interceptors that might override auth headers
 const http = axios.create({ timeout: 30000, validateStatus: s => s < 500 });
@@ -70,6 +72,7 @@ async function writeManifest(manifestPath, manifest) {
 
 // Debug helper: test the caller's effective permissions with current Authorization header
 async function debugTestPermissions({ bucket, permissions, headers }) {
+  if (!GCS_TRACE) return; // suppress unless explicitly tracing
   try {
     const baseUrl = `${GCS_API_BASE.replace(/\/$/, '')}/storage/v1/b/${encodeURIComponent(bucket)}/iam/testPermissions`;
     // Build query string with repeated permissions params to match API expectations
@@ -78,12 +81,12 @@ async function debugTestPermissions({ bucket, permissions, headers }) {
 
     const preview = String(headers?.Authorization || '').replace(/^Bearer\s+/, '').slice(0, 8);
     const extra = withRequesterPays({ headers });
-    dlog('testPermissions request', { url, hasAuth: Boolean(headers?.Authorization), tokenPreview: preview ? `${preview}…` : '' });
+    dtrace('testPermissions request', { url, hasAuth: Boolean(headers?.Authorization), tokenPreview: preview ? `${preview}…` : '' });
 
     const resp = await http.get(url, { headers: extra.headers });
     if (resp.status === 200) {
-      dlog('testPermissions response', { permissions: resp?.data?.permissions || [], status: resp.status });
-    } else {
+      dtrace('testPermissions response', { permissions: resp?.data?.permissions || [], status: resp.status });
+    } else if (GCS_DEBUG) {
       // eslint-disable-next-line no-console
       console.warn('[consumer][gcs] testPermissions error', {
         status: resp.status,
@@ -94,8 +97,10 @@ async function debugTestPermissions({ bucket, permissions, headers }) {
       });
     }
   } catch (err) {
-    // eslint-disable-next-line no-console
-    console.warn('[consumer][gcs] testPermissions threw', err?.message || String(err));
+    if (GCS_DEBUG) {
+      // eslint-disable-next-line no-console
+      console.warn('[consumer][gcs] testPermissions threw', err?.message || String(err));
+    }
   }
 }
 
@@ -107,16 +112,15 @@ async function listAllObjects({ bucket, prefix, headers }) {
   while (true) {
     const merged = withRequesterPays({ headers, params: { prefix, pageToken, fields: 'items(name,etag,generation,updated,md5Hash,size),nextPageToken' } });
 
-    if (GCS_DEBUG) {
+    if (GCS_TRACE) {
       const preview = String(merged.headers?.Authorization || '').replace(/^Bearer\s+/, '').slice(0, 8);
-      dlog('list page', { baseUrl, hasAuth: Boolean(merged.headers?.Authorization), tokenPreview: preview ? `${preview}…` : '', bucket, prefix, pageToken });
+      dtrace('list page', { baseUrl, hasAuth: Boolean(merged.headers?.Authorization), tokenPreview: preview ? `${preview}…` : '', bucket, prefix, pageToken });
     }
 
     const resp = await http.get(baseUrl, { params: merged.params, headers: merged.headers });
 
     if (resp.status === 404) {
-      // Treat non-existent bucket/prefix as empty on initial sync to avoid hard failure
-      dlog('list returned 404; treating as empty', { bucket, prefix });
+      if (GCS_DEBUG) dtrace('list returned 404; treating as empty', { bucket, prefix });
       return items;
     }
     if (resp.status !== 200) {
@@ -135,7 +139,7 @@ async function listAllObjects({ bucket, prefix, headers }) {
         userProject: GCS_BILLING_PROJECT || undefined,
       });
 
-      if (GCS_DEBUG) {
+      if (GCS_TRACE) {
         // eslint-disable-next-line no-console
         console.warn('[consumer][gcs] list error', {
           url: baseUrl,
@@ -187,11 +191,11 @@ async function downloadObject({ bucket, objectName, destPath, headers }) {
     maxBodyLength: Infinity,
   });
   if (resp.status === 404) {
-    dlog('download 404 (skipping)', { bucket, objectName });
+    if (GCS_DEBUG) dtrace('download 404 (skipping)', { bucket, objectName });
     return false;
   }
   if (resp.status !== 200) {
-    if (GCS_DEBUG) {
+    if (GCS_TRACE) {
       // eslint-disable-next-line no-console
       console.warn('[consumer][gcs] download error', {
         url,
@@ -259,7 +263,7 @@ async function uploadObject({ bucket, objectName, filePath, headers, ifGeneratio
 
   const resp = await http.post(url, data, { params: merged.params, headers: { ...merged.headers, 'Content-Type': contentType } });
   if (resp.status !== 200) {
-    if (GCS_DEBUG) {
+    if (GCS_TRACE) {
       // eslint-disable-next-line no-console
       console.warn('[consumer][gcs] upload error', {
         url,
@@ -315,8 +319,8 @@ export async function syncBucketPrefix({ bucket, prefix, workRoot, token }) {
   if (!bucket) throw new Error('missing_bucket');
   const authz = await getAuthHeader(token);
 
-  // When debugging, verify effective permissions of the current Authorization header
-  if (GCS_DEBUG && authz?.Authorization) {
+  // When tracing, verify effective permissions of the current Authorization header
+  if (GCS_TRACE && authz?.Authorization) {
     const perms = ['storage.objects.list'];
     if (GCS_ENABLE_UPLOAD) perms.push('storage.objects.create');
     await debugTestPermissions({ bucket, permissions: perms, headers: authz });
@@ -386,7 +390,7 @@ export async function syncBucketPrefix({ bucket, prefix, workRoot, token }) {
       // Conflict detection: if remote exists and its generation differs from what we recorded, skip
       if (remote && prev && prev.remoteGen && String(remote.generation) !== String(prev.remoteGen)) {
         conflicts++;
-        if (GCS_DEBUG) {
+        if (GCS_DEBUG && GCS_TRACE) {
           // eslint-disable-next-line no-console
           console.warn('[consumer][gcs] skip upload due to remote conflict', { objectName, remoteGen: String(remote.generation), prevRemoteGen: String(prev.remoteGen) });
         }
@@ -396,7 +400,7 @@ export async function syncBucketPrefix({ bucket, prefix, workRoot, token }) {
       // If manifest missing and remote exists, avoid overwriting unknown remote state
       if (!prev && remote) {
         conflicts++;
-        if (GCS_DEBUG) {
+        if (GCS_DEBUG && GCS_TRACE) {
           // eslint-disable-next-line no-console
           console.warn('[consumer][gcs] skip upload of untracked file; remote exists', { objectName, remoteGen: String(remote.generation) });
         }
@@ -419,7 +423,7 @@ export async function syncBucketPrefix({ bucket, prefix, workRoot, token }) {
           manifest[objectName] = { remoteGen: String(obj?.generation || ''), localMtime: lf.stat.mtimeMs, localSize: lf.stat.size };
           uploaded++;
         } catch (err) {
-          if (GCS_DEBUG) {
+          if (GCS_TRACE) {
             // eslint-disable-next-line no-console
             console.warn('[consumer][gcs] upload failed', { objectName, message: err?.message, details: err?.details });
           }

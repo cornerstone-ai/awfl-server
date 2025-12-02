@@ -87,13 +87,13 @@ export function createPersistentConsumerClient(headers) {
             try { obj = JSON.parse(line); } catch { obj = null; }
             if (!obj) continue;
             if (Object.prototype.hasOwnProperty.call(obj, 'result') || Object.prototype.hasOwnProperty.call(obj, 'error')) {
-              // Resolve current inflight
+              // Resolve current inflight regardless of tool success or error.
               const current = inflight;
               inflight = null;
               if (current) {
                 clearTimeout(current.timeoutId);
-                if (Object.prototype.hasOwnProperty.call(obj, 'error') && obj.error) current.reject(new Error(obj.error?.message || 'consumer_error'));
-                else current.resolve(obj);
+                // Treat tool-level errors as successful deliveries so the cursor can advance
+                current.resolve(obj);
               }
               // Immediately try to send next from queue
               drainQueue();

@@ -67,7 +67,8 @@ export function registerStreamRoute(app) {
       // eslint-disable-next-line no-console
       console.log('[consumer] work root ready', { workRoot, userId, projectId, workspaceId, sessionId });
     } catch (err) {
-      try { res.write(`${JSON.stringify({ error: 'work_root_error', message: err?.message })}\n`); } catch {}
+      // Avoid emitting top-level { error: ... } which the producer treats as a tool response
+      try { res.write(`${JSON.stringify({ type: 'work_root_error', message: err?.message })}\n`); } catch {}
       return void res.end();
     }
 
@@ -81,7 +82,7 @@ export function registerStreamRoute(app) {
     let syncing = false;
     let closed = false;
 
-    async function runSync(kind = 'manual', { suppressWrite = false } = {}) {
+    async function runSync(kind = 'manual') {
       if (!gcsBucket) return;
       if (syncing) return; // avoid overlapping runs
       syncing = true;
@@ -91,18 +92,14 @@ export function registerStreamRoute(app) {
         const stats = await syncBucketPrefix({ bucket: gcsBucket, prefix: gcsPrefix, workRoot, token: gcsToken });
         // eslint-disable-next-line no-console
         console.log('[consumer] gcs sync done', { stats, kind });
-        if (!suppressWrite) {
-          try { res.write(`${JSON.stringify({ type: 'gcs_sync', stats, kind })}\n`); } catch {}
-        }
+        // IMPORTANT: Do not write GCS sync markers to the response stream to avoid
+        // confusing the producer protocol. Only tool results and heartbeats go over the wire.
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[consumer] gcs sync error', err?.message || err);
         if (GCS_DEBUG && err?.details) {
           // eslint-disable-next-line no-console
           console.warn('[consumer] gcs sync error details', err.details);
-        }
-        if (!suppressWrite) {
-          try { res.write(`${JSON.stringify({ type: 'gcs_sync_error', error: err?.message || String(err), kind })}\n`); } catch {}
         }
       } finally {
         syncing = false;
@@ -111,11 +108,10 @@ export function registerStreamRoute(app) {
 
     // Register a process-level flush hook so a hard shutdown still attempts one final sync
     const sessionKey = makeSessionKey({ userId, projectId, workspaceId, sessionId });
-    registerSession(sessionKey, async () => { await runSync('shutdown', { suppressWrite: true }); });
+    registerSession(sessionKey, async () => { await runSync('shutdown'); });
 
     // Optionally trigger initial sync on connect
     if (SYNC_ON_START && gcsBucket) {
-      // fire and wait for first sync
       await runSync('start');
     } else {
       // eslint-disable-next-line no-console
@@ -124,7 +120,7 @@ export function registerStreamRoute(app) {
 
     // Set up periodic sync while stream is open
     if (gcsBucket && SYNC_INTERVAL_MS > 0) {
-      syncIv = setInterval(() => { if (!closed) runSync('interval', { suppressWrite: false }); }, Math.max(1000, SYNC_INTERVAL_MS));
+      syncIv = setInterval(() => { if (!closed) runSync('interval'); }, Math.max(1000, SYNC_INTERVAL_MS));
     }
 
     const { handleLine } = createHandlers({ workRoot, res, gcs: { bucket: gcsBucket, prefix: gcsPrefix, token: gcsToken } });
@@ -169,9 +165,9 @@ export function registerStreamRoute(app) {
       try { clearInterval(pingIv); } catch {}
       try { if (syncIv) clearInterval(syncIv); } catch {}
       // Final sync on shutdown if bucket configured
-      // Fire and forget to avoid blocking close; we also suppress response writes since stream is closing
+      // Fire and forget to avoid blocking close
       if (gcsBucket) {
-        try { runSync('shutdown', { suppressWrite: true }); } catch {}
+        try { runSync('shutdown'); } catch {}
       }
       try { unregisterSession(sessionKey); } catch {}
       // eslint-disable-next-line no-console

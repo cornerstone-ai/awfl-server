@@ -5,12 +5,18 @@ import { parseToolArgs } from '../utils/parse.js';
 import { doReadFile, doRunCommand, doUpdateFile } from '../tools/index.js';
 import { syncBucketPrefix } from '../gcs-sync.js';
 
+const CONSUMER_TRACE = /^1|true|yes$/i.test(String(process.env.CONSUMER_TRACE || '1'));
+function ctr(...args) { if (CONSUMER_TRACE) console.log('[consumer][cb]', ...args); }
+
 function isCallbackEvent(obj) {
+  if (!obj) return false;
   // Accept multiple shapes:
   // - { type: 'callback' | 'tool', ... }
+  // - { tool: 'READ_FILE', args: {...} }
   // - { tool_call: { function: { name, arguments } }, ... }
   const t = obj?.type || obj?.event || obj?.kind;
   if (t && (String(t).toLowerCase() === 'callback' || String(t).toLowerCase() === 'tool')) return true;
+  if (typeof obj?.tool === 'string' && obj.tool) return true;
   if (obj && obj.tool_call && obj.tool_call.function && obj.tool_call.function.name) return true;
   return false;
 }
@@ -29,9 +35,13 @@ export function createHandlers({ workRoot, res, gcs }) {
   const resolvePath = (rel) => resolveWithin(workRoot, rel);
 
   async function handleCallback(ev) {
+    const id = ev?.id || ev?.event_id || ev?.request_id || null;
+    const callbackId = ev?.callbackId || ev?.callback_id || null;
     const tool = String(getToolName(ev) || '').toUpperCase();
     const argsRaw = getToolArgs(ev);
     const args = parseToolArgs(argsRaw);
+
+    ctr('tool start', { id, tool, hasCallback: Boolean(callbackId) });
 
     try {
       let result;
@@ -51,17 +61,21 @@ export function createHandlers({ workRoot, res, gcs }) {
         // Unknown callback — return null as result per minimization contract
         result = null;
       }
-      try { res.write(`${JSON.stringify({ result })}\n`); } catch {}
+      const payload = id ? { id, result } : { result };
+      try { res.write(`${JSON.stringify(payload)}\n`); } catch {}
+      ctr('tool done', { id, tool, ok: true });
     } catch (err) {
-      try { res.write(`${JSON.stringify({ result: null, error: String(err?.message || err || 'tool_error') })}\n`); } catch {}
+      const payload = id ? { id, result: null, error: String(err?.message || err || 'tool_error') } : { result: null, error: String(err?.message || err || 'tool_error') };
+      try { res.write(`${JSON.stringify(payload)}\n`); } catch {}
+      ctr('tool done', { id, tool, ok: false, error: String(err?.message || err) });
     }
   }
 
   async function handleEventObject(obj) {
     if (obj == null) return;
     if (isCallbackEvent(obj)) return handleCallback(obj);
-    // Non-callback events: forward as-is to help with diagnostics/flow
-    try { res.write(`${JSON.stringify(obj)}\n`); } catch {}
+    // Non-callback events are ignored — only tool results are emitted to the response stream
+    return;
   }
 
   async function handleLine(line) {
@@ -71,8 +85,7 @@ export function createHandlers({ workRoot, res, gcs }) {
       const obj = JSON.parse(t);
       await handleEventObject(obj);
     } catch {
-      // Not JSON — forward raw line for transparency
-      try { res.write(`${t}\n`); } catch {}
+      // Ignore non-JSON (protocol heartbeats or noise)
     }
   }
 

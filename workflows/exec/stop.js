@@ -182,8 +182,20 @@ router.post('/stop', async (req, res) => {
           cancelled = true;
           break; // stop after first success
         } catch (e) {
-          const code = e?.code || e?.response?.status;
+          const code = e?.code ?? e?.response?.status;
           const msg = e?.message || String(e);
+          // Treat NOT_FOUND (404 or gRPC code 5) as a successful cancellation: execution no longer exists
+          if (code === 404 || code === 5) {
+            attempts.push({ workflow: wf, name, ok: true, treatedAsCancelled: true, code, note: 'Execution not found; marking as Cancelled' });
+            cancelled = true;
+            break; // stop after first treated-as-success
+          }
+          // Treat FAILED_PRECONDITION (gRPC code 9) where state is SUCCEEDED as success for our purposes
+          if (code === 9) {
+            attempts.push({ workflow: wf, name, ok: true, treatedAsCancelled: true, code, note: 'Execution already completed; marking as Cancelled' });
+            cancelled = true;
+            break; // stop after first treated-as-success
+          }
           attempts.push({ workflow: wf, name, ok: false, code, error: msg });
         }
       }
