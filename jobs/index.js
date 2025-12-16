@@ -1,6 +1,6 @@
 import express from 'express';
 
-import businessReportWorkerRoutes from './businessReport/index.js';
+// import businessReportWorkerRoutes from './businessReport/index.js';
 import firebaseRoutes from './firebaseDbApi.js';
 import llmRoutes from './llm.js';
 import loadConvoHistoryRoutes from './loadConvoHistory.js';
@@ -27,7 +27,7 @@ router.use(projectIdMiddleware);
 router.use('/projects', projectsRouter);
 
 // Mount individual job routes
-router.use('/business-report', businessReportWorkerRoutes);
+// router.use('/business-report', businessReportWorkerRoutes);
 router.use('/firebase', firebaseRoutes);
 router.use('/llm', llmRoutes);
 router.use('/convo-history', loadConvoHistoryRoutes);

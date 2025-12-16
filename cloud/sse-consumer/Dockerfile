@@ -38,4 +38,4 @@ USER node
 
 EXPOSE 8080
 # Health: curl -sf http://localhost:8080/healthz
-CMD ["node", "app/server.js"]
+CMD ["node", "app/worker.js"]

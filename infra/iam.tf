@@ -190,6 +190,21 @@ resource "google_cloud_run_service_iam_member" "consumer_invoker_from_producer" 
   member   = "serviceAccount:${google_service_account.producer.email}"
 }
 
+# Grant Pub/Sub editor to the SAs that actually create subscriptions:
+# - local dev server SA
+# - default Compute Engine SA (used by orchestration service)
+resource "google_project_iam_member" "dev_server_pubsub_editor" {
+  project = var.project_id
+  role    = "roles/pubsub.editor"
+  member  = "serviceAccount:${google_service_account.dev_server.email}"
+}
+
+resource "google_project_iam_member" "default_compute_sa_pubsub_editor" {
+  project = var.project_id
+  role    = "roles/pubsub.editor"
+  member  = "serviceAccount:${data.google_project.project.number}-compute@developer.gserviceaccount.com"
+}
+
 # Outputs for SA emails
 output "producer_service_account_email" {
   description = "Email of the AWFL Producer service account"

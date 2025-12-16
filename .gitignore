@@ -15,3 +15,4 @@ infra/*.local.auto.tfvars
 cloud/sse-consumer/node_modules
 package-lock.json
 cloud/gcs-harness/node_modules
+node_modules

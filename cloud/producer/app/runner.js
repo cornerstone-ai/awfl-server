@@ -20,14 +20,16 @@ import {
   EVENTS_HEARTBEAT_MS,
   RECONNECT_BACKOFF_MS,
   IDLE_SHUTDOWN_MS,
-  consumerHeaders,
+  TOPIC,
+  SUBSCRIPTION,
+  ENC_KEY_B64,
   contextHeaders,
 } from './config.js';
 
 import { getWorkflowsIdTokenHeaders } from './auth.js';
 import { postCallback } from './callbacks.js';
 import { getProjectCursor, postCursor } from './cursors.js';
-import { createPersistentConsumerClient } from './consumer.js';
+import { createPubSubTransport } from './pubsub.js';
 import { gracefulShutdown, registerShutdownHook } from './shutdown.js';
 import { startProjectLockClient } from './lock.js';
 
@@ -35,14 +37,14 @@ if (!WORKFLOWS_BASE_URL) {
   console.error('[producer] WORKFLOWS_BASE_URL is required');
   process.exit(2);
 }
-if (!process.env.CONSUMER_BASE_URL) {
-  console.error('[producer] CONSUMER_BASE_URL is required');
-  process.exit(2);
-}
 if (!X_USER_ID || !X_PROJECT_ID) {
   console.error('[producer] X_USER_ID and X_PROJECT_ID are required');
   process.exit(2);
 }
+// Pub/Sub is now the only supported transport for the consumer path
+if (!TOPIC) { console.error('[producer] TOPIC is required (Pub/Sub)'); process.exit(2); }
+if (!SUBSCRIPTION) { console.error('[producer] SUBSCRIPTION is required (Pub/Sub)'); process.exit(2); }
+if (!ENC_KEY_B64) { console.error('[producer] ENC_KEY_B64 is required (Pub/Sub)'); process.exit(2); }
 
 function parseToolArgs(maybe) {
   if (maybe == null) return {};
@@ -75,7 +77,7 @@ async function withRetries(fn, { attempts = 3, baseDelayMs = 250, label = 'retry
 
 async function run() {
   console.log('[producer] starting with context', { X_USER_ID, X_PROJECT_ID, X_WORKSPACE_ID, X_SESSION_ID, SINCE_ID, SINCE_TIME, CONSUMER_ID });
-  console.log('[producer] configuration', { CONSUMER_BASE_URL: process.env.CONSUMER_BASE_URL, EVENTS_HEARTBEAT_MS, RECONNECT_BACKOFF_MS, IDLE_SHUTDOWN_MS });
+  console.log('[producer] mode', { transport: 'pubsub', TOPIC, SUBSCRIPTION });
 
   // Ensure project-scoped work root exists (for mounted storage); non-fatal if it fails
   try {
@@ -121,10 +123,9 @@ async function run() {
   let reconnectDelay = RECONNECT_BACKOFF_MS;
   const reconnectCap = 30000;
 
-  // Create persistent consumer client
-  const headers = consumerHeaders({ gcsToken: gcsTokenToUse });
-  const consumer = createPersistentConsumerClient(headers);
-  registerShutdownHook(() => consumer.close());
+  // Create Pub/Sub transport client (mandatory)
+  const consumer = createPubSubTransport();
+  registerShutdownHook(() => consumer.close?.());
 
   // Start consumer lock client (acquire + refresh loop)
   const lockClient = startProjectLockClient({ onConflict: () => gracefulShutdown(0, 'lock_conflict') });
@@ -144,7 +145,7 @@ async function run() {
   registerShutdownHook(() => { try { if (idleTimer) clearTimeout(idleTimer); } catch {}; idleTimer = null; });
   resetIdleTimer('start');
 
-  // Backpressure controls
+  // Backpressure controls for upstream SSE stream
   let currentStream = null;
   let queueDepth = 0;
   const MAX_QUEUE_DEPTH = Number(process.env.EVENT_QUEUE_MAX || 16);
@@ -152,7 +153,7 @@ async function run() {
     try {
       if (currentStream && queueDepth >= MAX_QUEUE_DEPTH) {
         currentStream.pause?.();
-        console.log('[producer] paused SSE stream for backpressure', { queueDepth });
+        console.log('[producer] paused upstream SSE for backpressure', { queueDepth });
       }
     } catch {}
   }
@@ -160,7 +161,7 @@ async function run() {
     try {
       if (currentStream && queueDepth < Math.max(1, Math.floor(MAX_QUEUE_DEPTH / 2))) {
         currentStream.resume?.();
-        console.log('[producer] resumed SSE stream', { queueDepth });
+        console.log('[producer] resumed upstream SSE', { queueDepth });
       }
     } catch {}
   }
@@ -176,12 +177,11 @@ async function run() {
       .finally(() => { queueDepth--; maybeResumeStream(); });
   }
 
-  // Event stream connection
+  // Event stream connection to Workflows
   let eventsAbortController = null;
   async function connectEvents() {
     const params = new URLSearchParams();
-    // Always include projectId; optionally narrow by workspace
-    params.set('projectId', X_PROJECT_ID);
+    // Project must be provided via header (x-project-id). Optionally narrow by workspace via query.
     if (X_WORKSPACE_ID) params.set('workspaceId', X_WORKSPACE_ID);
 
     // Always resume from committed cursor; fall back to initialSinceId/time only
@@ -191,7 +191,24 @@ async function run() {
     const url = `${WORKFLOWS_BASE_URL.replace(/\/$/, '')}/events/stream?${params.toString()}`;
     const authz = await getWorkflowsIdTokenHeaders();
 
+    // Build headers and ensure x-project-id is set (lowercase) for the stream
+    const hdrs = {
+      Accept: 'text/event-stream',
+      ...authz,
+      ...contextHeaders(),
+    };
+    // Normalize to lowercase header key explicitly as some servers look for exact casing
+    if (hdrs['X-Project-Id'] && !hdrs['x-project-id']) {
+      hdrs['x-project-id'] = hdrs['X-Project-Id'];
+      delete hdrs['X-Project-Id'];
+    }
+
     console.log('[producer] connecting to', url);
+    // Emit a brief, non-sensitive header log for verification
+    console.log('[producer] stream header check', {
+      'x-project-id': hdrs['x-project-id'] || '(missing)',
+      'x-workspace-id': hdrs['x-workspace-id'] || hdrs['X-Workspace-Id'] || '(none)',
+    });
 
     const parser = createParser((event) => {
       if (event.type === 'event' || event.type === 'message') {
@@ -213,11 +230,7 @@ async function run() {
     eventsAbortController = new AbortController();
     try {
       const response = await axios.get(url, {
-        headers: {
-          Accept: 'text/event-stream',
-          ...authz,
-          ...contextHeaders(),
-        },
+        headers: hdrs,
         responseType: 'stream',
         timeout: 0,
         signal: eventsAbortController.signal,
@@ -241,6 +254,9 @@ async function run() {
   }
   registerShutdownHook(() => { try { eventsAbortController?.abort(); } catch {}; eventsAbortController = null; });
 
+  // Send the downscoped GCS token only once at start (first message)
+  let gcsBootstrapSent = false;
+
   async function handleEvent(evt) {
     const tool = evt?.tool_call?.function?.name;
     if (!tool) return false; // ignore
@@ -248,6 +264,12 @@ async function run() {
 
     // Prepare a minimal event to send to consumer
     const forwardEvt = { ...evt, tool_call: { function: { name: tool, arguments: args } } };
+
+    // Attach GCS bootstrap info only on the first message for this producer session
+    if (!gcsBootstrapSent && gcsTokenToUse) {
+      forwardEvt.gcs = { bucket: GCS_BUCKET, prefix: gcsPrefix, token: gcsTokenToUse };
+      gcsBootstrapSent = true;
+    }
 
     console.log('[producer] -> consumer send', { id: evt.id, tool, hasCallback: !!evt?.callback_id });
 

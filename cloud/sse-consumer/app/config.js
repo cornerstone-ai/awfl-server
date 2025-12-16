@@ -1,58 +1,38 @@
-// Centralized configuration for SSE consumer app
+// Centralized configuration for consumer app (Pub/Sub worker)
 
 export const NODE_ENV = process.env.NODE_ENV || 'development';
 
-// Upstream workflows/events service base URL
-export const WORKFLOWS_BASE_URL = process.env.WORKFLOWS_BASE_URL || 'http://localhost:8081';
-// Optional audience to request identity tokens for (OIDC)
-export const WORKFLOWS_AUDIENCE = process.env.WORKFLOWS_AUDIENCE || '';
+// Pub/Sub transport
+export const PUBSUB_ENABLE = ['1','true','yes'].includes(String(process.env.PUBSUB_ENABLE || '1').toLowerCase());
+export const TOPIC = process.env.TOPIC || '';
+export const SUBSCRIPTION = process.env.SUBSCRIPTION || '';
+export const REPLY_CHANNEL = process.env.REPLY_CHANNEL || 'resp';
 
-// Inbound service-to-service auth token (shared secret). If unset, auth is skipped.
-export const SERVICE_AUTH_TOKEN = process.env.SERVICE_AUTH_TOKEN || '';
+// Encryption
+export const ENC_KEY_B64 = process.env.ENC_KEY_B64 || '';
+export const ENC_VER = process.env.ENC_VER || 'a256gcm:v1';
 
-// Filesystem work root base directory for per-session/project workspace
+// Optional idle exit (ms) to allow graceful shutdown of Jobs when no traffic
+export const IDLE_EXIT_MS = Number(process.env.IDLE_EXIT_MS || 0); // 0 = disabled
+
+// Workspace
 export const WORK_ROOT_BASE = process.env.WORK_ROOT_BASE || '/workspace';
-
-// Optional path prefix template for workspace layout under WORK_ROOT_BASE.
-// Supports {userId},{projectId},{workspaceId},{sessionId}
-// Defaults to the prior layout to preserve behavior.
 export const WORK_PREFIX_TEMPLATE = process.env.WORK_PREFIX_TEMPLATE || '{userId}/{projectId}/{workspaceId}/{sessionId}';
 
-// GCS sync configuration
-// JSON API base for GCS
+// GCS sync configuration (align with routes/stream behavior)
 export const GCS_API_BASE = process.env.GCS_API_BASE || 'https://www.googleapis.com';
-// Max number of parallel downloads when syncing
 export const GCS_DOWNLOAD_CONCURRENCY = Number(process.env.GCS_DOWNLOAD_CONCURRENCY || 8);
-// Max number of parallel uploads when syncing
 export const GCS_UPLOAD_CONCURRENCY = Number(process.env.GCS_UPLOAD_CONCURRENCY || 4);
-// Enable pushing modified local files back to GCS (default: enabled)
 export const GCS_ENABLE_UPLOAD = ['1','true','yes'].includes(String(process.env.GCS_ENABLE_UPLOAD || '1').toLowerCase());
-// Bucket to sync from (producer-provided token should be scoped to this bucket/prefix)
 export const GCS_BUCKET = process.env.GCS_BUCKET || '';
-// Prefix template for objects within the bucket to mirror into the work root
-// Supports {userId},{projectId},{workspaceId},{sessionId}
 export const GCS_PREFIX_TEMPLATE = process.env.GCS_PREFIX_TEMPLATE || '{userId}/{projectId}/{sessionId}/';
-// Trigger an initial sync automatically when /sessions/stream is established
-// Default enabled to ensure the local workspace is hydrated promptly.
-export const SYNC_ON_START = ['1','true','yes'].includes(String(process.env.SYNC_ON_START || '1').toLowerCase());
-// Interval in ms to re-run GCS sync while the stream is open
-// Default enabled at 15000ms; set to 0 to disable periodic syncs.
-export const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS || 15000);
-
-// Optional requester-pays billing project to charge for GCS requests
-// If set, we will include both the x-goog-user-project header and userProject query param where applicable
 export const GCS_BILLING_PROJECT = process.env.GCS_BILLING_PROJECT || process.env.BILLING_PROJECT || '';
 
-// Stream heartbeat interval back to the producer
-export const EVENTS_HEARTBEAT_MS = Number(process.env.EVENTS_HEARTBEAT_MS || 15000);
+// Sync toggles to mirror the legacy SSE route behavior
+export const SYNC_ON_START = ['1','true','yes'].includes(String(process.env.SYNC_ON_START || '1').toLowerCase());
+export const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS || 5000); // 0 disables periodic sync
 
 // Tooling limits
 export const READ_FILE_MAX_BYTES = Number(process.env.READ_FILE_MAX_BYTES || 512 * 1024);
 export const OUTPUT_MAX_BYTES = Number(process.env.OUTPUT_MAX_BYTES || 256 * 1024);
 export const RUN_COMMAND_TIMEOUT_SECONDS = Number(process.env.RUN_COMMAND_TIMEOUT_SECONDS || 60);
-
-// Server
-export const PORT = Number(process.env.PORT || 8080);
-
-// Shutdown behavior
-export const SHUTDOWN_SYNC_TIMEOUT_MS = Number(process.env.SHUTDOWN_SYNC_TIMEOUT_MS || 4000);

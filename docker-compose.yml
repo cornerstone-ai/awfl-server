@@ -42,6 +42,7 @@ services:
       # e.g., mount per-session host dir: -v /abs/path/work/{sessionId}:/mnt/work
       # - PRODUCER_SIDECAR_DOCKER_ARGS=-v /host/work/{sessionId}:/mnt/work
       - GCS_BUCKET=${GCS_BUCKET}
+      - PUBSUB_TOPIC=${PUBSUB_TOPIC}
     volumes:
       - ./serviceAccountKey.json:/app/serviceAccountKey.json
       - ./jobs:/app/jobs

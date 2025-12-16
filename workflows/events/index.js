@@ -112,7 +112,7 @@ router.get('/stream', async (req, res) => {
     const since_id = req.query.since_id ? String(req.query.since_id) : null;
     const since_time = req.query.since_time ? String(req.query.since_time) : null;
 
-    console.log("Last event ID:", lastEventId);
+    console.log("[events/stream] Last event ID:", lastEventId);
 
     const sse = createSSEConnection(res, { heartbeatMs });
 
@@ -177,6 +177,7 @@ router.get('/stream', async (req, res) => {
       // Prepare initial replay for project scope
       let replayItems = [];
       let lastSeenTime = null;
+      // These comma return logic are wrong!
       if (lastEventId) {
         replayItems, lastSeenTime = await backend.replayProjectByUlid(lastEventId, Number(process.env.RELAY_REPLAY_LIMIT || 500));
       } else if (since_id) {
@@ -185,7 +186,8 @@ router.get('/stream', async (req, res) => {
         replayItems, lastSeenTime = await backend.replayProjectByTime(since_time, Number(process.env.RELAY_REPLAY_LIMIT || 500));
       }
 
-      console.log("Last seen time: ", lastSeenTime)
+      console.log("[events/stream] Last seen time: ", lastSeenTime, ", since_id: ", since_id, ", since_time: ", since_time)
+      console.log("[events/stream] Replay items: ", JSON.stringify(replayItems))
 
       if (sessionId) {
         // Session-scoped workspace: include only that session's events. Background flag is ignored per new model.
@@ -216,12 +218,14 @@ router.get('/stream', async (req, res) => {
         // Project-wide workspace: send *all* project events (no filtering by live sessions)
         for (const ev of replayItems) {
           sse.sendEvent(ev);
+          console.log("[events/stream] Sent event: ", JSON.stringify(ev));
           lastSeenTime = ev.create_time;
         }
         if (replayItems?.length) incCounter('relay_events_replayed_total', replayItems.length);
 
         // Subscribe to all future project events
         const unsub = await backend.subscribeProject((ev) => {
+          console.log("[events/stream] Sending event: ", JSON.stringify(ev));
           const ok = sse.sendEvent(ev);
           if (!ok) {
             incCounter('relay_events_dropped_total');
@@ -241,54 +245,6 @@ router.get('/stream', async (req, res) => {
 
       return; // handled
     }
-
-    // Legacy sessionId streaming
-  //   const sessionId = sessionIdLegacy;
-  //   if (!sessionId) {
-  //     res.status(400).end('event: error\ndata: {"error":"workspaceId or sessionId required"}\n\n');
-  //     return;
-  //   }
-
-  //   const includeBackground = parseBool(req.query.include_background, false);
-
-  //   // Determine replay precedence: Last-Event-ID > since_id > since_time
-  //   let replayItems = [];
-  //   if (lastEventId) {
-  //     replayItems = await backend.replayByUlid(sessionId, lastEventId, Number(process.env.RELAY_REPLAY_LIMIT || 500));
-  //   } else if (since_id) {
-  //     replayItems = await backend.replayByUlid(sessionId, since_id, Number(process.env.RELAY_REPLAY_LIMIT || 500));
-  //   } else if (since_time) {
-  //     replayItems = await backend.replayByTime(sessionId, since_time, Number(process.env.RELAY_REPLAY_LIMIT || 500));
-  //   }
-
-  //   let lastSeenTime = null;
-  //   if (replayItems?.length) {
-  //     for (const ev of replayItems) {
-  //       if (!includeBackground && (ev.background || ev?.data?.payload?.background)) continue;
-  //       sse.sendEvent(ev);
-  //       lastSeenTime = ev.create_time;
-  //     }
-  //     incCounter('relay_events_replayed_total', replayItems.length);
-  //   }
-
-  //   // Subscribe to live events for this session
-  //   const unsub = await backend.subscribe(sessionId, (ev) => {
-  //     if (!includeBackground && (ev.background || ev?.data?.payload?.background)) return;
-  //     // Backpressure: if write failed, close
-  //     const ok = sse.sendEvent(ev);
-  //     if (!ok) {
-  //       incCounter('relay_events_dropped_total');
-  //       try { sse.close(); } catch {}
-  //     } else {
-  //       incCounter('relay_events_streamed_total');
-  //     }
-  //   }, { after_time: lastSeenTime });
-
-  //   // Close handling
-  //   req.on('close', () => {
-  //     try { unsub && unsub(); } catch {}
-  //     try { sse.close(); } catch {}
-  //   });
   } catch (err) {
     console.error('[events stream] error', err);
     try { res.end(); } catch {}

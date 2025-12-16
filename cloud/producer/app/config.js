@@ -3,6 +3,7 @@
 // Env config
 export const WORKFLOWS_BASE_URL = process.env.WORKFLOWS_BASE_URL || '';
 export const WORKFLOWS_AUDIENCE = process.env.WORKFLOWS_AUDIENCE || WORKFLOWS_BASE_URL;
+// Legacy HTTP consumer path (deprecated in Pub/Sub-only mode)
 export const CONSUMER_BASE_URL = process.env.CONSUMER_BASE_URL || '';
 export const CONSUMER_AUDIENCE = process.env.CONSUMER_AUDIENCE || CONSUMER_BASE_URL;
 export const SERVICE_AUTH_TOKEN = process.env.SERVICE_AUTH_TOKEN || '';
@@ -29,7 +30,16 @@ export const CONSUMER_ID = process.env.CONSUMER_ID || '';
 export const EVENTS_HEARTBEAT_MS = Number(process.env.EVENTS_HEARTBEAT_MS || 15000);
 export const RECONNECT_BACKOFF_MS = Number(process.env.RECONNECT_BACKOFF_MS || 1000);
 
-// Header helpers
+// Pub/Sub (new path)
+export const PROJECT_ID = process.env.GCP_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT || '';
+export const TOPIC = process.env.TOPIC || process.env.PUBSUB_TOPIC || '';
+// Per-run reply subscription name (for channel="resp")
+export const SUBSCRIPTION = process.env.SUBSCRIPTION || process.env.REPLY_SUBSCRIPTION || '';
+export const ENC_KEY_B64 = process.env.ENC_KEY_B64 || '';
+export const PUBSUB_EMULATOR_HOST = process.env.PUBSUB_EMULATOR_HOST || '';
+export const PUBSUB_ENABLE = /^1|true|yes$/i.test(String(process.env.PUBSUB_ENABLE || (TOPIC && SUBSCRIPTION ? '1' : '')));
+
+// Header helpers (used for Workflows and legacy HTTP consumer path)
 export function consumerHeaders({ gcsToken } = {}) {
   const h = {
     'Content-Type': 'application/x-ndjson',
