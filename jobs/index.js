@@ -1,6 +1,6 @@
 import express from 'express';
 
-import businessReportWorkerRoutes from './businessReport/index.js';
+// import businessReportWorkerRoutes from './businessReport/index.js';
 import firebaseRoutes from './firebaseDbApi.js';
 import llmRoutes from './llm.js';
 import loadConvoHistoryRoutes from './loadConvoHistory.js';
@@ -17,14 +17,17 @@ import { projectIdMiddleware } from '../workflows/projects/util.js';
 import callbacksRoutes from './callbacks/index.js'
 import callbacksProxyRoutes from '../workflows/callbacks/index.js'
 import producerRoutes from './producer/index.js'
+import projectsRouter from '../workflows/projects/index.js'
 
 const router = express.Router();
 router.use(express.json());
 router.use(workflowsUserInject);
 router.use(projectIdMiddleware);
 
+router.use('/projects', projectsRouter);
+
 // Mount individual job routes
-router.use('/business-report', businessReportWorkerRoutes);
+// router.use('/business-report', businessReportWorkerRoutes);
 router.use('/firebase', firebaseRoutes);
 router.use('/llm', llmRoutes);
 router.use('/convo-history', loadConvoHistoryRoutes);

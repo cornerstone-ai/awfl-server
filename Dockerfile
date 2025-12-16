@@ -1,59 +1,29 @@
-FROM --platform=linux/amd64 node:22-slim
+FROM --platform=linux/arm64 node:22-alpine
 
 WORKDIR /app
 
-# Install system dependencies, Chromium, and docker CLI (for launching local sidecar/producer containers)
-RUN apt-get update && apt-get install -y \
-  chromium \
-  ca-certificates \
-  fonts-liberation \
-  libappindicator3-1 \
-  libasound2 \
-  libatk-bridge2.0-0 \
-  libatk1.0-0 \
-  libcups2 \
-  libdbus-1-3 \
-  libgdk-pixbuf2.0-0 \
-  libnspr4 \
-  libnss3 \
-  libx11-xcb1 \
-  libxcomposite1 \
-  libxdamage1 \
-  libxrandr2 \
-  libxss1 \
-  libxtst6 \
-  libdrm2 \
-  libgbm1 \
-  xdg-utils \
-  wget \
+# Install minimal useful tools
+RUN apk add --no-cache \
+  bash \
   curl \
-  docker.io \
-  --no-install-recommends && \
-  rm -rf /var/lib/apt/lists/*
+  docker-cli \
+  ca-certificates
 
-# Avoid puppeteer trying to download its own Chrome inside the image
-ENV PUPPETEER_SKIP_DOWNLOAD=1
-# Let our code know where Chromium lives
-ENV CHROME_PATH=/usr/bin/chromium
-
-# Copy package files and install dependencies
+# Copy package files & install dependencies
 COPY package*.json ./
 RUN npm install
 
-# Copy rest of the app
-COPY . .
+# Copy app code
+COPY ./jobs ./workflows dev.js ./
 
-# Environment
 ENV NODE_ENV=development
 
-# Expose ports (Cloud Run ignores EXPOSE but kept for clarity)
+# Expose ports for Cloud Run, local dev, etc.
 EXPOSE 8080 5000 4000
 
-# Load secrets helper and runtime entrypoint
-# Copy load-secrets.sh to /app and keep start.sh in scripts/
+# Load secrets and run entrypoint script
 COPY secrets.txt scripts/load-secrets.sh ./
 COPY scripts/start.sh scripts/start.sh
 RUN chmod +x load-secrets.sh scripts/start.sh
 
-# Start via start.sh so SERVICE_TARGET selects the entrypoint
 CMD ["scripts/start.sh"]

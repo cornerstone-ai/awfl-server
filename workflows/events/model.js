@@ -211,6 +211,7 @@ class FirestoreBackend {
   async replayProjectByUlid(since_id, limit = 500) {
     if (!since_id) return this.recentProject(limit);
     const d = await this.collProject().doc(since_id).get();
+    console.log("[events/stream] Event: ", JSON.stringify(d), ", exists: ", d.exists)
     if (!d.exists) return this.recentProject(limit);
     const t = d.data().create_time;
     return this.replayProjectByTime(t, limit), t;
@@ -218,6 +219,7 @@ class FirestoreBackend {
   async replayProjectByTime(since_time, limit = 500) {
     let q = this.collProject().orderBy('create_time').startAfter(since_time).limit(limit);
     const snap = await q.get();
+    console.log("[events/stream], Snap: ", JSON.stringify(snap))
     return snap.docs.map(d => d.data()), since_time;
   }
   async recentProject(limit = 100) {
