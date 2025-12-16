@@ -1,0 +1,7 @@
+{
+  "id": "project-manager",
+  "name": "Project Manager",
+  "description": "Coordinates repository tasks, planning, and workflow execution.",
+  "workflowName": "codebase-ProjectManager",
+  "source": "file"
+}

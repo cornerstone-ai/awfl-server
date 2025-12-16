@@ -124,10 +124,25 @@ router.post('/stop', async (req, res) => {
       }
     }
 
-    if (workflowsToTry.length === 0) {
+    // Preload workflow names from status documents per execId (preferred per-exec candidate)
+    const statusWorkflowByExec = new Map();
+    for (const id of toCancel) {
+      try {
+        const snap = await db.collection(statusesCollection).doc(String(id)).get();
+        const wf = (snap.exists ? (snap.get('workflow') || '') : '') || '';
+        const wfNorm = wf ? withEnvSuffix(String(wf)) : '';
+        statusWorkflowByExec.set(String(id), wfNorm);
+      } catch (_e) {
+        statusWorkflowByExec.set(String(id), '');
+      }
+    }
+
+    const anyStatusWorkflow = Array.from(statusWorkflowByExec.values()).some((v) => Boolean(v));
+
+    if (!anyStatusWorkflow && workflowsToTry.length === 0) {
       return res.status(400).json({
-        error: 'No workflows provided and WORKFLOWS_CANCEL_WORKFLOWS is not configured',
-        hint: 'Pass body.workflow or body.workflows, or set WORKFLOWS_CANCEL_WORKFLOWS (optionally with WORKFLOW_ENV) env var',
+        error: 'No workflows provided, WORKFLOWS_CANCEL_WORKFLOWS not configured, and no workflow recorded in status',
+        hint: 'Ensure workflowExecStatus.workflow is recorded, or pass body.workflow/workflows, or set WORKFLOWS_CANCEL_WORKFLOWS',
       });
     }
 
@@ -137,7 +152,29 @@ router.post('/stop', async (req, res) => {
     for (const id of toCancel) {
       const attempts = [];
       let cancelled = false;
+
+      // Build per-exec candidate list: prefer status.workflow, then provided/env
+      const perExecSeen = new Set();
+      const perExecCandidates = [];
+      const preferred = statusWorkflowByExec.get(String(id));
+      if (preferred) {
+        perExecSeen.add(preferred);
+        perExecCandidates.push(preferred);
+      }
       for (const wf of workflowsToTry) {
+        if (!perExecSeen.has(wf)) {
+          perExecSeen.add(wf);
+          perExecCandidates.push(wf);
+        }
+      }
+
+      // If still no candidates (should be rare due to earlier check), skip gracefully
+      if (perExecCandidates.length === 0) {
+        results.push({ execId: id, cancelled: false, attempts: [{ ok: false, error: 'no-candidate-workflows' }] });
+        continue;
+      }
+
+      for (const wf of perExecCandidates) {
         const name = client.executionPath(projectId, region, wf, id);
         try {
           await client.cancelExecution({ name });
@@ -145,8 +182,20 @@ router.post('/stop', async (req, res) => {
           cancelled = true;
           break; // stop after first success
         } catch (e) {
-          const code = e?.code || e?.response?.status;
+          const code = e?.code ?? e?.response?.status;
           const msg = e?.message || String(e);
+          // Treat NOT_FOUND (404 or gRPC code 5) as a successful cancellation: execution no longer exists
+          if (code === 404 || code === 5) {
+            attempts.push({ workflow: wf, name, ok: true, treatedAsCancelled: true, code, note: 'Execution not found; marking as Cancelled' });
+            cancelled = true;
+            break; // stop after first treated-as-success
+          }
+          // Treat FAILED_PRECONDITION (gRPC code 9) where state is SUCCEEDED as success for our purposes
+          if (code === 9) {
+            attempts.push({ workflow: wf, name, ok: true, treatedAsCancelled: true, code, note: 'Execution already completed; marking as Cancelled' });
+            cancelled = true;
+            break; // stop after first treated-as-success
+          }
           attempts.push({ workflow: wf, name, ok: false, code, error: msg });
         }
       }

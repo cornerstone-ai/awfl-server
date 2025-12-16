@@ -26,6 +26,8 @@ services:
       # Ensure the launched containers join this compose network so they can reach js-server by DNS.
       # If your compose project name differs, update the network name accordingly or set COMPOSE_PROJECT_NAME=awfl-server before running compose.
       - PRODUCER_LOCAL_DOCKER_ARGS=--network awfl-server_default
+      # Provide ADC to the producer container for local dev (mount host key and set GOOGLE_APPLICATION_CREDENTIALS inside producer)
+      - PRODUCER_CREDENTIALS_MOUNT_PATH=/app/serviceAccountKey.json
       # Optional tunables for SSE
       - EVENTS_HEARTBEAT_MS=15000
       - RECONNECT_BACKOFF_MS=1000
@@ -39,6 +41,8 @@ services:
       # Optional: extra docker args for the sidecar with templating for {userId},{projectId},{workspaceId},{sessionId}
       # e.g., mount per-session host dir: -v /abs/path/work/{sessionId}:/mnt/work
       # - PRODUCER_SIDECAR_DOCKER_ARGS=-v /host/work/{sessionId}:/mnt/work
+      - GCS_BUCKET=${GCS_BUCKET}
+      - PUBSUB_TOPIC=${PUBSUB_TOPIC}
     volumes:
       - ./serviceAccountKey.json:/app/serviceAccountKey.json
       - ./jobs:/app/jobs

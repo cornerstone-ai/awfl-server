@@ -1,0 +1,43 @@
+# Cloud Run Job template for Consumer execution (Pub/Sub-only)
+#
+# Provisioned by CI and then triggered by the Jobs service via
+# projects.locations.jobs.run with minimal env overrides.
+#
+# Placeholders replaced in CI before applying:
+# - __JOB_NAME__            -> repo var CONSUMER_CLOUD_RUN_JOB_NAME (e.g., consumer-bridge)
+# - __SERVICE_ACCOUNT__     -> vars.CONSUMER_JOB_SA_EMAIL or fallback CLOUD_RUN_RUNTIME_SA
+# - __CONSUMER_IMAGE__      -> built image URI from CI (steps.consumer_image)
+# - __TOPIC__               -> shared Pub/Sub topic name (stable per env)
+#
+# Runtime defaults expected by consumer runner:
+# - Pub/Sub-only transport when PUBSUB_ENABLE=1
+# - SUBSCRIPTION and ENC_KEY_B64 are provided per-run by the orchestrator
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: __JOB_NAME__
+spec:
+  template:
+    template:
+      serviceAccountName: __SERVICE_ACCOUNT__
+      timeoutSeconds: 3600
+      containers:
+      - name: consumer
+        image: __CONSUMER_IMAGE__
+        env:
+        - name: NODE_ENV
+          value: production
+        - name: PUBSUB_ENABLE
+          value: "1"
+        - name: TOPIC
+          value: __TOPIC__
+        # Per-run values; the Jobs runner overrides these at run time
+        - name: SUBSCRIPTION
+          value: ""
+        - name: ENC_KEY_B64
+          value: ""
+        - name: REPLY_CHANNEL
+          value: "resp"
+      restartPolicy: Never
+  taskCount: 1
+  parallelism: 1

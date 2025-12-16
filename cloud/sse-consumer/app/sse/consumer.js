@@ -3,24 +3,45 @@ import { getIdTokenHeader } from '../auth.js';
 import { resolveWithin } from '../storage.js';
 import { parseToolArgs } from '../utils/parse.js';
 import { doReadFile, doRunCommand, doUpdateFile } from '../tools/index.js';
+import { syncBucketPrefix } from '../gcs-sync.js';
+
+const CONSUMER_TRACE = /^1|true|yes$/i.test(String(process.env.CONSUMER_TRACE || '1'));
+function ctr(...args) { if (CONSUMER_TRACE) console.log('[consumer][cb]', ...args); }
 
 function isCallbackEvent(obj) {
+  if (!obj) return false;
+  // Accept multiple shapes:
+  // - { type: 'callback' | 'tool', ... }
+  // - { tool: 'READ_FILE', args: {...} }
+  // - { tool_call: { function: { name, arguments } }, ... }
   const t = obj?.type || obj?.event || obj?.kind;
-  if (!t) return false;
-  return String(t).toLowerCase() === 'callback' || String(t).toLowerCase() === 'tool';
+  if (t && (String(t).toLowerCase() === 'callback' || String(t).toLowerCase() === 'tool')) return true;
+  if (typeof obj?.tool === 'string' && obj.tool) return true;
+  if (obj && obj.tool_call && obj.tool_call.function && obj.tool_call.function.name) return true;
+  return false;
 }
 
 function getToolName(obj) {
+  if (obj?.tool_call?.function?.name) return obj.tool_call.function.name;
   return obj?.tool || obj?.name || obj?.callback || obj?.command || obj?.action || obj?.type;
 }
 
-export function createHandlers({ workRoot, res }) {
+function getToolArgs(obj) {
+  if (obj?.tool_call?.function) return obj.tool_call.function.arguments;
+  return obj?.args ?? obj?.arguments ?? obj?.payload?.args ?? obj?.payload;
+}
+
+export function createHandlers({ workRoot, res, gcs }) {
   const resolvePath = (rel) => resolveWithin(workRoot, rel);
 
   async function handleCallback(ev) {
+    const id = ev?.id || ev?.event_id || ev?.request_id || null;
+    const callbackId = ev?.callbackId || ev?.callback_id || null;
     const tool = String(getToolName(ev) || '').toUpperCase();
-    const argsRaw = ev?.args ?? ev?.arguments ?? ev?.payload?.args ?? ev?.payload;
+    const argsRaw = getToolArgs(ev);
     const args = parseToolArgs(argsRaw);
+
+    ctr('tool start', { id, tool, hasCallback: Boolean(callbackId) });
 
     try {
       let result;
@@ -30,21 +51,31 @@ export function createHandlers({ workRoot, res }) {
         result = await doUpdateFile(args, resolvePath);
       } else if (tool === 'RUN_COMMAND') {
         result = await doRunCommand(args, workRoot);
+      } else if (tool === 'GCS_SYNC' || tool === 'SYNC_GCS' || tool === 'GCS.MIRROR') {
+        const bucket = String(args.bucket || gcs?.bucket || '');
+        const prefix = String(args.prefix || gcs?.prefix || '');
+        const token = String(args.token || gcs?.token || '');
+        if (!bucket) throw new Error('GCS_SYNC: missing bucket');
+        result = await syncBucketPrefix({ bucket, prefix, workRoot, token });
       } else {
         // Unknown callback — return null as result per minimization contract
         result = null;
       }
-      try { res.write(`${JSON.stringify({ result })}\n`); } catch {}
-    } catch (_err) {
-      try { res.write(`${JSON.stringify({ result: null })}\n`); } catch {}
+      const payload = id ? { id, result } : { result };
+      try { res.write(`${JSON.stringify(payload)}\n`); } catch {}
+      ctr('tool done', { id, tool, ok: true });
+    } catch (err) {
+      const payload = id ? { id, result: null, error: String(err?.message || err || 'tool_error') } : { result: null, error: String(err?.message || err || 'tool_error') };
+      try { res.write(`${JSON.stringify(payload)}\n`); } catch {}
+      ctr('tool done', { id, tool, ok: false, error: String(err?.message || err) });
     }
   }
 
   async function handleEventObject(obj) {
     if (obj == null) return;
     if (isCallbackEvent(obj)) return handleCallback(obj);
-    // Non-callback events: forward as-is to help with diagnostics/flow
-    try { res.write(`${JSON.stringify(obj)}\n`); } catch {}
+    // Non-callback events are ignored — only tool results are emitted to the response stream
+    return;
   }
 
   async function handleLine(line) {
@@ -54,8 +85,7 @@ export function createHandlers({ workRoot, res }) {
       const obj = JSON.parse(t);
       await handleEventObject(obj);
     } catch {
-      // Not JSON — forward raw line for transparency
-      try { res.write(`${t}\n`); } catch {}
+      // Ignore non-JSON (protocol heartbeats or noise)
     }
   }
 
