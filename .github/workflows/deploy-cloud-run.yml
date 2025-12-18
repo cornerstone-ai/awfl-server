@@ -222,7 +222,7 @@ jobs:
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --allow-unauthenticated \
             --timeout=3600 \
-            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:api,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL}" \
+            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:api,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL},PUBSUB_TOPIC=${PUBSUB_TOPIC}" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
       - name: Deploy Jobs service (auth-required)
@@ -234,7 +234,7 @@ jobs:
             --service-account="${CLOUD_RUN_RUNTIME_SA}" \
             --no-allow-unauthenticated \
             --timeout=3600 \
-            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:jobs,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL},CLOUD_RUN_LOCATION=${GCP_REGION}" \
+            --set-env-vars="NODE_ENV=production,SERVICE_TARGET=start:jobs,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL},CLOUD_RUN_LOCATION=${GCP_REGION},PUBSUB_TOPIC=${PUBSUB_TOPIC}" \
             ${{ steps.secrets.outputs.SECRET_FLAGS }}
 
 # Notes:
