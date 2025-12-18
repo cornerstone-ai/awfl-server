@@ -34,6 +34,9 @@ resource "local_file" "actions_variables" {
     CLOUD_RUN_API_SERVICE  = "api"
     CLOUD_RUN_JOBS_SERVICE = "jobs"
 
+    # Shared work bucket
+    GCS_BUCKET = google_storage_bucket.shared.name
+
     # Service account emails for Producer and Consumer Jobs
     # deploy-cloud-run.yml expects *_JOB_SA_EMAIL (and falls back to CLOUD_RUN_RUNTIME_SA)
     PRODUCER_JOB_SA_EMAIL = google_service_account.producer.email
@@ -58,5 +61,7 @@ resource "local_file" "actions_variables" {
     google_service_account.consumer,
     # Ensure topic exists before referencing it
     google_pubsub_topic.shared,
+    # Ensure bucket exists before referencing it
+    google_storage_bucket.shared,
   ]
 }

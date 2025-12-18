@@ -21,6 +21,8 @@ jobs:
       CLOUD_RUN_RUNTIME_SA: ${{ vars.CLOUD_RUN_RUNTIME_SA }}
       CLOUD_RUN_API_SERVICE: ${{ vars.CLOUD_RUN_API_SERVICE }}
       CLOUD_RUN_JOBS_SERVICE: ${{ vars.CLOUD_RUN_JOBS_SERVICE }}
+      # Shared work bucket
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
       # Pub/Sub topic (stable per env) used by producer/consumer
       PUBSUB_TOPIC: ${{ vars.PUBSUB_TOPIC }}
       # Optional stable Job names. If omitted, Jobs service/orchestrator can generate per-run/random job ids.
@@ -218,7 +220,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          COMMON_ENV_VARS="NODE_ENV=production,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL},PUBSUB_TOPIC=${PUBSUB_TOPIC},PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME},CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME}"
+          COMMON_ENV_VARS="NODE_ENV=production,GCP_PROJECT=${GCP_PROJECT_ID},ALLOW_SKIP_AUTH=0,WORKFLOWS_BASE_URL=${WORKFLOWS_BASE_URL},GCS_BUCKET=${GCS_BUCKET},PUBSUB_TOPIC=${PUBSUB_TOPIC},PRODUCER_CLOUD_RUN_JOB_NAME=${PRODUCER_CLOUD_RUN_JOB_NAME},CONSUMER_CLOUD_RUN_JOB_NAME=${CONSUMER_CLOUD_RUN_JOB_NAME}"
           echo "COMMON_ENV_VARS=${COMMON_ENV_VARS}" >> "$GITHUB_OUTPUT"
 
       - name: Deploy API service (public)
