@@ -182,11 +182,6 @@ jobs:
           sed -n '1,220p' /tmp/producer.job.rendered.yaml
           echo "==================================================================="
 
-          # Validate manifest schema before applying (helps pinpoint parse errors)
-          gcloud run jobs replace /tmp/producer.job.rendered.yaml \
-            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
-            --validate-only
-
           gcloud run jobs replace /tmp/producer.job.rendered.yaml --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}"
 
       # Create/replace Consumer Cloud Run Job (Pub/Sub only)
@@ -213,11 +208,6 @@ jobs:
           echo "==================== Rendered Consumer Job YAML ===================="
           sed -n '1,260p' /tmp/consumer.job.rendered.yaml
           echo "==================================================================="
-
-          # Validate manifest schema before applying (helps pinpoint parse errors)
-          gcloud run jobs replace /tmp/consumer.job.rendered.yaml \
-            --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}" \
-            --validate-only
 
           gcloud run jobs replace /tmp/consumer.job.rendered.yaml --region="${GCP_REGION}" --project="${GCP_PROJECT_ID}"
 
