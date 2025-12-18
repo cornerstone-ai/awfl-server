@@ -1,4 +1,9 @@
-FROM --platform=linux/arm64 node:22-alpine
+# NOTE: Don’t pin a constant --platform here.
+# If you need to cross-build, pass it at build time:
+#   docker buildx build --platform=linux/amd64 ...
+# or
+#   docker build --platform=linux/amd64 ...
+FROM node:22-alpine
 
 WORKDIR /app
 
