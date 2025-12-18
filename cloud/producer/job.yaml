@@ -18,8 +18,10 @@ metadata:
   name: __JOB_NAME__
 spec:
   template:
+    taskCount: 1
+    parallelism: 1
     template:
-      serviceAccountName: __SERVICE_ACCOUNT__
+      serviceAccount: __SERVICE_ACCOUNT__
       timeoutSeconds: 3600
       containers:
       - name: producer
@@ -36,6 +38,3 @@ spec:
           value: ""
         - name: ENC_KEY_B64
           value: ""
-      restartPolicy: Never
-    taskCount: 1
-    parallelism: 1
