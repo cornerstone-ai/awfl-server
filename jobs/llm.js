@@ -23,7 +23,9 @@ const PRICING = {
   'gpt-4.5': { prompt: 75.00, completion: 150.00 },
   'o1': { prompt: 15.00, completion: 60.00 },
   'o3': { prompt: 2.00, completion: 8.00 },
-  'gpt-5': { prompt: 1.25, completion: 10.00 } // fixed key: completion
+  'gpt-5': { prompt: 1.25, completion: 10.00 },
+  'gpt-5.1': { prompt: 1.25, completion: 10.00 },
+  'gpt-5.2': { prompt: 1.75, completion: 14.00 }
 };
 
 // Max token limits for known models
@@ -38,7 +40,9 @@ const MAX_TOKENS = {
   'gpt-3.5-turbo-16k': 4096,
   'o4-mini': 100000,
   'o3': 100000,
-  'gpt-5': 128000
+  'gpt-5': 128000,
+  'gpt-5.1': 128000,
+  'gpt-5.2': 128000
 };
 
 function fixed_temperature(model, temperature) {

@@ -19,7 +19,9 @@ COPY package*.json ./
 RUN npm install
 
 # Copy app code
-COPY ./jobs ./workflows dev.js api.server.js jobs.server.js ./
+COPY ./workflows ./workflows
+COPY ./jobs ./jobs
+COPY dev.js api.server.js jobs.server.js ./
 
 ENV NODE_ENV=development
 
