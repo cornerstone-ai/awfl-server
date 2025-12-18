@@ -42,6 +42,11 @@ resource "local_file" "actions_variables" {
     # Shared Pub/Sub topic used for req/resp channels
     PUBSUB_TOPIC = google_pubsub_topic.shared.name
 
+    # Stable Cloud Run Job names (templates) for the orchestrator to run.
+    # These are created/replaced by CI (deploy-cloud-run.yml) using cloud/*/job.yaml.
+    PRODUCER_CLOUD_RUN_JOB_NAME = "awfl-producer"
+    CONSUMER_CLOUD_RUN_JOB_NAME = "awfl-consumer"
+
     # Use Cloud Run Jobs service URL when available; otherwise provide a safe placeholder
     WORKFLOWS_BASE_URL = var.cloud_run_services_exist ? data.google_cloud_run_service.jobs[0].status[0].url : "https://jobs.${var.root_domain}"
   })
