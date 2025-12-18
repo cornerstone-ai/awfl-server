@@ -30,12 +30,12 @@ spec:
         - name: PUBSUB_ENABLE
           value: "1"
         - name: TOPIC
-          value: __TOPIC__
+          value: "__TOPIC__"
         # Per-run values; the Jobs runner typically overrides these at run time
         - name: SUBSCRIPTION
           value: ""
         - name: ENC_KEY_B64
           value: ""
       restartPolicy: Never
-  taskCount: 1
-  parallelism: 1
+    taskCount: 1
+    parallelism: 1
