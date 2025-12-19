@@ -69,6 +69,7 @@ export function buildProducerEnv({
     { name: 'CONSUMER_ID', value: consumerId },
     { name: 'GCS_BUCKET', value: process.env.GCS_BUCKET },
     { name: 'GCS_DEBUG', value: '1' },
+    { name: 'GCS_TRACE', value: '1' },
     { name: 'LOCK_LEASE_MS', value: String(leaseMs) },
     { name: 'ENC_KEY_B64', value: encKeyB64 },
     { name: 'ENC_VER', value: encVer },
