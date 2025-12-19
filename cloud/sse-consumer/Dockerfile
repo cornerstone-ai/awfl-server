@@ -2,29 +2,40 @@
 # - Uses Node 22 (includes global fetch)
 # - Installs production deps only
 # - Runs as non-root user and writes workspace under /workspace
+#
+# GitHub auth:
+# - Provide authentication via one of:
+#   - Set environment variable GH_TOKEN or GITHUB_TOKEN to a classic GitHub PAT
+#     with at least public_repo scope (repo if you might fork private repos), OR
+#   - Use interactive auth: gh auth login --web
 
 FROM node:22-slim AS base
 ENV NODE_ENV=production
 WORKDIR /app
 
-# Install helpful OS utilities for debugging and agent operations
-# Keep minimal and without recommends to limit image size
+# Install OS utilities needed for git/GitHub operations.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates \
        curl \
        git \
-       jq \
-       bash \
-       unzip \
-       procps \
+       openssh-client \
+       gnupg \
     && rm -rf /var/lib/apt/lists/*
 
-# Install deps separately for better layer caching. Prefer npm ci with lockfile.
-# Copies only package manifests so dependency layer is reused when app code changes.
-# Use package*.json so build does not fail when package-lock.json is absent.
+# Install GitHub CLI (gh) v2.x from the official GitHub apt repo.
+RUN mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      | dd of=/etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+      | tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install deps separately for better layer caching.
 COPY package*.json ./
-# If a lockfile exists, use npm ci for reproducible installs; otherwise fall back to npm install.
 RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi \
     && npm cache clean --force
 
@@ -32,13 +43,9 @@ RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit
 COPY app ./app
 COPY README.md ./README.md
 
-# Prepare writable workspace for tools (READ_FILE/UPDATE_FILE/RUN_COMMAND)
-# This is the default WORK_ROOT_BASE; override in runtime if needed.
+# Prepare writable workspace for tools
 RUN mkdir -p /workspace && chown -R node:node /workspace
 
-# Use non-root user
 USER node
 
-EXPOSE 8080
-# Health: curl -sf http://localhost:8080/healthz
 CMD ["node", "app/worker.js"]

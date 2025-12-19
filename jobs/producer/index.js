@@ -17,6 +17,7 @@ import { ensureSubscription, addSubscriberBinding, deleteSubscription } from './
 import { sanitizeId, buildBaseContext, deriveEncryption, buildProducerEnv } from './envBuilder.js';
 import { launchLocalPair } from './localDocker.js';
 import { runCloudRunJob } from './cloudRun.js';
+import { resolveStoredGithubToken } from '../../workflows/gitFiles.js';
 
 const router = express.Router();
 router.use(express.json());
@@ -126,6 +127,15 @@ router.post('/start', async (req, res) => {
       console.warn('[jobs/producer:start] IAM binding warning', e?.message || e);
     }
 
+    // Resolve any stored GitHub token (Firestore-backed) so the consumer can perform git ops.
+    // IMPORTANT: never log the token.
+    let githubToken = null;
+    try {
+      githubToken = await resolveStoredGithubToken({ userId, projectId });
+    } catch {
+      githubToken = null;
+    }
+
     if (localDocker) {
       const image = localDockerImage || 'awfl-producer:dev';
       const producerContainerName = `producer-${consumerId}`.slice(0, 63);
@@ -172,6 +182,8 @@ router.post('/start', async (req, res) => {
             encVer,
             topic,
             subReq,
+            // Pass through stored token (if any)
+            githubToken,
           });
           sidecarInfo = consumerInfo;
           try {
@@ -253,6 +265,7 @@ router.post('/start', async (req, res) => {
         { name: 'REPLY_CHANNEL', value: 'resp' },
         { name: 'GCS_DEBUG', value: '1' },
         { name: 'GCS_TRACE', value: '1' },
+        ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
       ],
     }];
 

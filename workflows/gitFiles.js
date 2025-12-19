@@ -2,8 +2,11 @@
 // Service helpers and an Express router for interacting with
 // GitHub repo files (list/read/write/delete) using the GitHub REST API.
 // Default repo: github.com/dezmoanded/TopAigents
-// Auth resolution: per-request from Firestore (scoped by req.userId + projectId),
+// Auth resolution:
+//   - server-side: per-request from Firestore (scoped by req.userId + projectId),
 //                  with env var fallback (GITHUB_TOKEN) when unauthenticated or missing.
+//   - producer-side: exported helper resolveStoredGithubToken({ userId, projectId })
+//                    to pass token into consumer env (GITHUB_TOKEN)
 
 import express from 'express';
 import axios from 'axios';
@@ -79,6 +82,14 @@ async function loadGithubConfig(userId, projectId) {
     // Firestore might be unavailable in some environments
     return null;
   }
+}
+
+// Exported helper for non-HTTP contexts (e.g. producer) to fetch stored token.
+// - Returns the stored Firestore token if present, otherwise falls back to process.env.GITHUB_TOKEN.
+// - Never logs the token.
+export async function resolveStoredGithubToken({ userId, projectId }) {
+  const cfg = await loadGithubConfig(userId, projectId);
+  return cfg?.token || process.env.GITHUB_TOKEN || null;
 }
 
 async function saveGithubConfig(userId, projectId, { owner, repo, token, defaultBranch }) {

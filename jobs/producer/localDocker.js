@@ -18,6 +18,8 @@ export async function launchLocalPair({
   encVer,
   topic,
   subReq,
+  // Optional: GitHub token passthrough
+  githubToken,
 }) {
   let consumerInfo = null;
 
@@ -38,6 +40,9 @@ export async function launchLocalPair({
       topic,
       subReq,
     });
+
+    // Pass through GitHub token if available (do not log)
+    if (githubToken) consumerEnv.push({ name: 'GITHUB_TOKEN', value: String(githubToken) });
 
     consumerInfo = await runLocalDocker({
       image: consumerImage,
