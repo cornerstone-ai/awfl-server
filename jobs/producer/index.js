@@ -251,6 +251,7 @@ router.post('/start', async (req, res) => {
     if (!producerJobName) { await bestEffortRelease({ userId, projectId }); return res.status(500).json({ error: 'Server missing PRODUCER_CLOUD_RUN_JOB_NAME' }); }
     if (!consumerJobName) { await bestEffortRelease({ userId, projectId }); return res.status(500).json({ error: 'Server missing CONSUMER_CLOUD_RUN_JOB_NAME' }); }
 
+    // Build overrides up front so both jobs can be started in parallel
     const consumerOverrides = [{
       name: 'consumer',
       env: [
@@ -260,17 +261,10 @@ router.post('/start', async (req, res) => {
         { name: 'REPLY_CHANNEL', value: 'resp' },
         { name: 'GCS_DEBUG', value: '1' },
         { name: 'GCS_TRACE', value: '1' },
+        { name: 'CONSUMER_ID', value: consumerId },
         ...(githubToken ? [{ name: 'GITHUB_TOKEN', value: githubToken }] : []),
       ],
     }];
-
-    const consumerRun = await runCloudRunJob({ gcpProject, location, jobName: consumerJobName, containerOverrides: consumerOverrides });
-    if (!consumerRun.ok) {
-      await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
-      await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
-      await bestEffortRelease({ userId, projectId });
-      return res.status(consumerRun.status).json({ error: 'Failed to start consumer job', details: consumerRun.data });
-    }
 
     const producerEnvPairs = buildProducerEnv({
       userId,
@@ -292,13 +286,40 @@ router.post('/start', async (req, res) => {
 
     const producerOverrides = [{ name: producerContainerName, env: [...producerEnvPairs, { name: 'SUBSCRIPTION', value: subResp }] }];
 
-    const producerRun = await runCloudRunJob({ gcpProject, location, jobName: producerJobName, containerOverrides: producerOverrides });
-
-    if (!producerRun.ok) {
+    // Start both Cloud Run Jobs in parallel; handle failures with unified cleanup/cancellation
+    let consumerRun, producerRun;
+    try {
+      [consumerRun, producerRun] = await Promise.all([
+        runCloudRunJob({ gcpProject, location, jobName: consumerJobName, containerOverrides: consumerOverrides }),
+        runCloudRunJob({ gcpProject, location, jobName: producerJobName, containerOverrides: producerOverrides }),
+      ]);
+    } catch (e) {
+      // Transport/runtime fault starting one of the jobs
       await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
       await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
       await bestEffortRelease({ userId, projectId });
-      return res.status(producerRun.status).json({ error: 'Failed to start producer job', details: producerRun.data });
+      return res.status(500).json({ error: 'Transport error starting Cloud Run jobs', details: String(e?.message || e) });
+    }
+
+    if (!consumerRun?.ok || !producerRun?.ok) {
+      // Attempt to cancel any job that did start
+      const cancelOps = [];
+      try {
+        if (consumerRun?.ok && consumerRun?.data?.name) cancelOps.push(cancelOperation({ name: consumerRun.data.name }).catch(() => ({ ok: false })));
+        if (producerRun?.ok && producerRun?.data?.name) cancelOps.push(cancelOperation({ name: producerRun.data.name }).catch(() => ({ ok: false })));
+        await Promise.allSettled(cancelOps);
+      } catch {}
+
+      await deleteSubscription({ gcpProject, name: subReq }).catch(() => {});
+      await deleteSubscription({ gcpProject, name: subResp }).catch(() => {});
+      await bestEffortRelease({ userId, projectId });
+
+      const status = (!consumerRun?.ok ? consumerRun?.status : null) || (!producerRun?.ok ? producerRun?.status : null) || 500;
+      return res.status(status).json({
+        error: 'Failed to start jobs',
+        consumer: consumerRun,
+        producer: producerRun,
+      });
     }
 
     try {

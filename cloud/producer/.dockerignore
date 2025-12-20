@@ -1,0 +1,23 @@
+# Exclude files not needed for the image build context
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# VCS metadata
+.git
+.gitignore
+
+# OS/editor cruft
+**/.DS_Store
+**/Thumbs.db
+.vscode
+.idea
+
+# Local env/examples and docs not copied by Dockerfile
+.env
+.env.*
+.env.example
+README.md
+job.yaml
