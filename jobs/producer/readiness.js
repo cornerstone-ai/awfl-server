@@ -31,17 +31,31 @@ function stateOfExecution(exec) {
   return 'queued';
 }
 
+// Track operations we've already warned about to avoid log spam
+const warnedOps = new Set();
+
 async function resolveExecutionName(opName) {
   if (!opName) return null;
   try {
     const op = await getOperation({ name: opName });
-    if (!op?.ok) return null;
+    if (!op?.ok) {
+      if (!warnedOps.has(opName)) {
+        console.warn('[readiness] getOperation !ok', { name: opName, status: op?.status, data: op?.data });
+        warnedOps.add(opName);
+      }
+      return null;
+    }
     const data = op.data || {};
     if (data.done) {
       if (data.response?.name) return data.response.name;
       if (data.metadata?.target) return data.metadata.target;
     }
-  } catch {}
+  } catch (e) {
+    if (!warnedOps.has(opName)) {
+      console.warn('[readiness] getOperation error', { name: opName, err: e?.message || String(e) });
+      warnedOps.add(opName);
+    }
+  }
   return null;
 }
 
@@ -57,6 +71,9 @@ export async function monitorCloudRunStartup({
   let consExecName = null;
   let lastMix = 0;
 
+  // Warn-once sets for execution fetches
+  const warnedExecs = new Set();
+
   try { await setStartupStatus({ userId, projectId, message: 'Queued/creating…' }); } catch {}
 
   const order = { queued: 0, starting: 1, running: 2 };
@@ -71,10 +88,34 @@ export async function monitorCloudRunStartup({
     let consExec = null;
 
     if (prodExecName) {
-      try { const r = await getExecutionByName({ name: prodExecName }); if (r?.ok) prodExec = r.data; } catch {}
+      try {
+        const r = await getExecutionByName({ name: prodExecName });
+        if (r?.ok) prodExec = r.data;
+        else if (!warnedExecs.has(prodExecName)) {
+          console.warn('[readiness] getExecution !ok', { name: prodExecName, status: r?.status, data: r?.data });
+          warnedExecs.add(prodExecName);
+        }
+      } catch (e) {
+        if (!warnedExecs.has(prodExecName)) {
+          console.warn('[readiness] getExecution error', { name: prodExecName, err: e?.message || String(e) });
+          warnedExecs.add(prodExecName);
+        }
+      }
     }
     if (consExecName) {
-      try { const r = await getExecutionByName({ name: consExecName }); if (r?.ok) consExec = r.data; } catch {}
+      try {
+        const r = await getExecutionByName({ name: consExecName });
+        if (r?.ok) consExec = r.data;
+        else if (!warnedExecs.has(consExecName)) {
+          console.warn('[readiness] getExecution !ok', { name: consExecName, status: r?.status, data: r?.data });
+          warnedExecs.add(consExecName);
+        }
+      } catch (e) {
+        if (!warnedExecs.has(consExecName)) {
+          console.warn('[readiness] getExecution error', { name: consExecName, err: e?.message || String(e) });
+          warnedExecs.add(consExecName);
+        }
+      }
     }
 
     const ps = stateOfExecution(prodExec);
@@ -98,7 +139,20 @@ export async function monitorCloudRunStartup({
       return true;
     }
 
-    if (now - start > timeoutMs) return true;
+    if (now - start > timeoutMs) {
+      // On timeout, clear status and log a single warning with what we know
+      try { await completeStartupProgress({ userId, projectId, reason: 'cloud-run timeout' }); } catch {}
+      console.warn('[readiness] timeout clearing status', {
+        userId,
+        projectId,
+        prodExecName,
+        consExecName,
+        elapsedMs: now - start,
+        ps,
+        cs,
+      });
+      return true;
+    }
     return false;
   };
 
