@@ -1,24 +1,10 @@
 // Cloud Run startup readiness monitor
 // - Polls LROs to discover execution names
-// - Polls executions for state and updates project.status_message with coarse status plus cosmetic micro-steps
-// - Clears status_message early via completeStartupProgress once both jobs have started
+// - Polls executions for state and updates project.status_message with concise status
+// - Clears status_message as soon as both jobs are running (no "Running…" status emitted)
 
 import { getOperation, getExecutionByName } from './cloudRun.js';
 import { setStartupStatus, completeStartupProgress } from './progress.js';
-
-const MICRO_STEPS = [
-  'Contacting regional scheduler…',
-  'Warming container image cache…',
-  'Pulling container layers…',
-  'Provisioning network…',
-  'Attaching service account…',
-  'Preparing volumes…',
-  'Verifying health checks…',
-  'Routing through service mesh…',
-  'Syncing logs…',
-];
-
-function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
 
 function stateOfExecution(exec) {
   if (!exec) return 'queued';
@@ -29,18 +15,26 @@ function stateOfExecution(exec) {
   if (runningCount > 0) return 'running';
   // Treat presence of startTime as "starting"
   if (exec.startTime) return 'starting';
-  // If the execution has already finished (Completed true/false), we still consider startup phase passed
   // Cloud Run v2 typically uses STATE_TRUE/STATE_FALSE, not SUCCEEDED/FAILED strings
   if (completed && String(completed.state || '').toUpperCase().includes('TRUE')) return 'running';
   if (exec.completionTime) return 'running';
   return 'queued';
 }
 
+// Track operations we've already warned about to avoid log spam
+const warnedOps = new Set();
+
 async function resolveExecutionName(opName) {
   if (!opName) return null;
   try {
     const op = await getOperation({ name: opName });
-    if (!op?.ok) return null;
+    if (!op?.ok) {
+      if (!warnedOps.has(opName)) {
+        console.warn('[readiness] getOperation !ok', { name: opName, status: op?.status, data: op?.data });
+        warnedOps.add(opName);
+      }
+      return null;
+    }
     const data = op.data || {};
 
     // Prefer metadata.target if present (available before operation is done)
@@ -51,7 +45,12 @@ async function resolveExecutionName(opName) {
 
     // If the operation has completed, response.name may also contain the execution resource name
     if (data.done && data.response?.name) return data.response.name;
-  } catch {}
+  } catch (e) {
+    if (!warnedOps.has(opName)) {
+      console.warn('[readiness] getOperation error', { name: opName, err: e?.message || String(e) });
+      warnedOps.add(opName);
+    }
+  }
   return null;
 }
 
@@ -65,9 +64,16 @@ export async function monitorCloudRunStartup({
   const start = Date.now();
   let prodExecName = null;
   let consExecName = null;
-  let lastMix = 0;
+  let lastBase = null;
 
-  try { await setStartupStatus({ userId, projectId, message: 'Queued/creating…' }); } catch {}
+  // Warn-once sets for execution fetches
+  const warnedExecs = new Set();
+
+  // Initial message: explicitly queued/creating
+  try {
+    await setStartupStatus({ userId, projectId, message: 'Queued/creating…' });
+    lastBase = 'Queued/creating…';
+  } catch {}
 
   const order = { queued: 0, starting: 1, running: 2 };
 
@@ -81,34 +87,67 @@ export async function monitorCloudRunStartup({
     let consExec = null;
 
     if (prodExecName) {
-      try { const r = await getExecutionByName({ name: prodExecName }); if (r?.ok) prodExec = r.data; } catch {}
+      try {
+        const r = await getExecutionByName({ name: prodExecName });
+        if (r?.ok) prodExec = r.data;
+        else if (!warnedExecs.has(prodExecName)) {
+          console.warn('[readiness] getExecution !ok', { name: prodExecName, status: r?.status, data: r?.data });
+          warnedExecs.add(prodExecName);
+        }
+      } catch (e) {
+        if (!warnedExecs.has(prodExecName)) {
+          console.warn('[readiness] getExecution error', { name: prodExecName, err: e?.message || String(e) });
+          warnedExecs.add(prodExecName);
+        }
+      }
     }
     if (consExecName) {
-      try { const r = await getExecutionByName({ name: consExecName }); if (r?.ok) consExec = r.data; } catch {}
+      try {
+        const r = await getExecutionByName({ name: consExecName });
+        if (r?.ok) consExec = r.data;
+        else if (!warnedExecs.has(consExecName)) {
+          console.warn('[readiness] getExecution !ok', { name: consExecName, status: r?.status, data: r?.data });
+          warnedExecs.add(consExecName);
+        }
+      } catch (e) {
+        if (!warnedExecs.has(consExecName)) {
+          console.warn('[readiness] getExecution error', { name: consExecName, err: e?.message || String(e) });
+          warnedExecs.add(consExecName);
+        }
+      }
     }
 
     const ps = stateOfExecution(prodExec);
     const cs = stateOfExecution(consExec);
     const slow = (ps && cs) ? (order[ps] <= order[cs] ? ps : cs) : (ps || cs || 'queued');
 
-    let base = slow === 'queued' ? 'Queued/creating…'
-      : slow === 'starting' ? 'Starting…'
-      : 'Running…';
-
-    if (now - lastMix > 1400) {
-      base += ' ' + pick(MICRO_STEPS);
-      lastMix = now;
-    }
-
-    try { await setStartupStatus({ userId, projectId, message: base }); } catch {}
-
-    const startedEnough = (s) => s === 'starting' || s === 'running';
-    if (startedEnough(ps) && startedEnough(cs)) {
-      try { await completeStartupProgress({ userId, projectId, reason: 'cloud-run started' }); } catch {}
+    // If both are running, clear the status message (do not emit "Running…")
+    if (slow === 'running') {
+      try { await completeStartupProgress({ userId, projectId, reason: 'cloud-run running' }); } catch {}
       return true;
     }
 
-    if (now - start > timeoutMs) return true;
+    // Otherwise, show concise message per phase
+    const base = slow === 'queued' ? 'Queued/creating…' : 'Starting cloud consumer..';
+    if (base !== lastBase) {
+      try { await setStartupStatus({ userId, projectId, message: base }); } catch {}
+      lastBase = base;
+    }
+
+    if (now - start > timeoutMs) {
+      // On timeout, clear status and log a single warning with what we know
+      try { await completeStartupProgress({ userId, projectId, reason: 'cloud-run timeout' }); } catch {}
+      console.warn('[readiness] timeout clearing status', {
+        userId,
+        projectId,
+        prodExecName,
+        consExecName,
+        elapsedMs: now - start,
+        ps,
+        cs,
+      });
+      return true;
+    }
     return false;
   };
 
